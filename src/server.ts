@@ -1,20 +1,11 @@
 import { join } from "node:path";
 import { openShelf } from "./db";
-import { page, type ViewState } from "./views";
+import { parseView, viewLocation } from "./view-state";
+import { page } from "./views";
 
 const publicDir = join(import.meta.dir, "..", "public");
 const html = (body: string, status = 200) =>
   new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8" } });
-
-const parseView = (url: URL): ViewState => ({
-  filter: url.searchParams.get("filter") === "unread" ? "unread" : "all",
-  order: url.searchParams.get("order") === "title" ? "title" : "added",
-});
-
-const viewLocation = (url: URL, view: ViewState) => {
-  if (!url.searchParams.has("filter") && !url.searchParams.has("order")) return "/";
-  return `/?${new URLSearchParams(view)}`;
-};
 
 const redirect = (location: string) => Response.redirect(location, 303);
 
@@ -44,7 +35,8 @@ export function startServer(options: { port?: number; dbPath?: string } = {}) {
       const match = url.pathname.match(/^\/books\/(\d+)\/(toggle|delete)$/);
       if (request.method === "POST" && match) {
         const id = Number(match[1]);
-        match[2] === "toggle" ? shelf.toggle(id) : shelf.remove(id);
+        const changed = match[2] === "toggle" ? shelf.toggle(id) : shelf.remove(id);
+        if (!changed) return html(page(shelf.list(), view, "Book not found."), 404);
         return redirect(viewLocation(url, view));
       }
       return new Response("Not found", { status: 404 });

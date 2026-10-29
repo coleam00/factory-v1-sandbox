@@ -62,6 +62,22 @@ describe("HTTP routes", () => {
     expect(await invalid.text()).toContain("Title and author are required");
     expect((await fetch(`${base}/missing`)).status).toBe(404);
   });
+
+  test("reports missing books for every row mutation", async () => {
+    for (const action of ["toggle", "delete"] as const) {
+      const response = await fetch(
+        `${base}/books/999/${action}?filter=unread&order=title`,
+        { method: "POST", redirect: "manual" },
+      );
+
+      expect(response.status).toBe(404);
+      const body = await response.text();
+      expect(body).toContain("Book not found.");
+      expect(body).toContain('<option value="unread" selected>');
+      expect(body).toContain('<option value="title" selected>');
+      expect(body).toContain('action="/books?filter=unread&amp;order=title"');
+    }
+  });
 });
 
 describe("shelf view", () => {

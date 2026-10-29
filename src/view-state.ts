@@ -1,0 +1,74 @@
+import type { Book } from "./db";
+
+const defineField = <
+  const Options extends Record<string, { readonly label: string }>,
+  const Default extends keyof Options,
+>(defaultValue: Default, options: Options) => ({ defaultValue, options });
+
+export const viewFields = {
+  filter: defineField("all", {
+    all: { label: "All books", includes: (_book: Book) => true },
+    unread: { label: "Unread only", includes: (book: Book) => !book.read },
+  }),
+  order: defineField("added", {
+    added: {
+      label: "Recently added",
+      compare: (left: Book, right: Book) =>
+        right.createdAt.localeCompare(left.createdAt) || right.id - left.id,
+    },
+    title: {
+      label: "Title A-Z",
+      compare: (left: Book, right: Book) => {
+        const byTitle = left.title.localeCompare(right.title, undefined, {
+          sensitivity: "base",
+        });
+        return byTitle || right.id - left.id;
+      },
+    },
+  }),
+} as const;
+
+export type ViewState = {
+  [Field in keyof typeof viewFields]: Extract<
+    keyof (typeof viewFields)[Field]["options"],
+    string
+  >;
+};
+
+export const defaultView: ViewState = {
+  filter: viewFields.filter.defaultValue,
+  order: viewFields.order.defaultValue,
+};
+
+const hasOption = <Options extends object>(
+  options: Options,
+  value: string | null,
+): value is Extract<keyof Options, string> => value !== null && value in options;
+
+export const parseView = (url: URL): ViewState => {
+  const filter = url.searchParams.get("filter");
+  const order = url.searchParams.get("order");
+
+  return {
+    filter: hasOption(viewFields.filter.options, filter)
+      ? filter
+      : viewFields.filter.defaultValue,
+    order: hasOption(viewFields.order.options, order)
+      ? order
+      : viewFields.order.defaultValue,
+  };
+};
+
+const query = (view: ViewState) => new URLSearchParams(view).toString();
+
+export const viewQuery = (view: ViewState) => `?${query(view).replaceAll("&", "&amp;")}`;
+
+export const viewLocation = (url: URL, view: ViewState) => {
+  const hasViewState = Object.keys(viewFields).some((field) => url.searchParams.has(field));
+  return hasViewState ? `/?${query(view)}` : "/";
+};
+
+export const applyView = (books: Book[], view: ViewState) =>
+  books
+    .filter(viewFields.filter.options[view.filter].includes)
+    .sort(viewFields.order.options[view.order].compare);

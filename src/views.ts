@@ -1,9 +1,11 @@
 import type { Book } from "./db";
-
-export type ViewState = {
-  filter: "all" | "unread";
-  order: "added" | "title";
-};
+import {
+  applyView,
+  defaultView,
+  viewFields,
+  viewQuery,
+  type ViewState,
+} from "./view-state";
 
 const escapeHtml = (value: string) =>
   value.replace(/[&<>"']/g, (char) =>
@@ -12,26 +14,24 @@ const escapeHtml = (value: string) =>
     ]!,
   );
 
-const viewQuery = ({ filter, order }: ViewState) =>
-  `?filter=${filter}&amp;order=${order}`;
+const optionTags = (
+  options: Record<string, { readonly label: string }>,
+  selected: string,
+) =>
+  Object.entries(options)
+    .map(
+      ([value, option]) =>
+        `<option value="${escapeHtml(value)}"${value === selected ? " selected" : ""}>${escapeHtml(option.label)}</option>`,
+    )
+    .join("");
 
 export function page(
   books: Book[],
-  view: ViewState = { filter: "all", order: "added" },
+  view: ViewState = defaultView,
   error = "",
 ) {
   const read = books.filter((book) => book.read).length;
-  const visibleBooks = books
-    .filter((book) => view.filter === "all" || !book.read)
-    .sort((left, right) => {
-      if (view.order === "title") {
-        const byTitle = left.title.localeCompare(right.title, undefined, {
-          sensitivity: "base",
-        });
-        return byTitle || right.id - left.id;
-      }
-      return right.createdAt.localeCompare(left.createdAt) || right.id - left.id;
-    });
+  const visibleBooks = applyView(books, view);
   const query = viewQuery(view);
   const rows = visibleBooks
     .map(
@@ -65,12 +65,10 @@ export function page(
   <section><div class="shelf-heading"><h2>Books</h2>
     <form class="view-controls" method="get" action="/">
       <label>Show<select name="filter">
-        <option value="all"${view.filter === "all" ? " selected" : ""}>All books</option>
-        <option value="unread"${view.filter === "unread" ? " selected" : ""}>Unread only</option>
+        ${optionTags(viewFields.filter.options, view.filter)}
       </select></label>
       <label>Order<select name="order">
-        <option value="added"${view.order === "added" ? " selected" : ""}>Recently added</option>
-        <option value="title"${view.order === "title" ? " selected" : ""}>Title A-Z</option>
+        ${optionTags(viewFields.order.options, view.order)}
       </select></label>
       <button>Apply</button>
     </form>
