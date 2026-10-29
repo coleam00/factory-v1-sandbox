@@ -43,7 +43,7 @@ export const defaultView: ViewState = {
 const hasOption = <Options extends object>(
   options: Options,
   value: string | null,
-): value is Extract<keyof Options, string> => value !== null && value in options;
+): value is Extract<keyof Options, string> => value !== null && Object.hasOwn(options, value);
 
 export const parseView = (url: URL): ViewState => {
   const filter = url.searchParams.get("filter");

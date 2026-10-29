@@ -109,6 +109,15 @@ describe("shelf view", () => {
       expect(fallbackBody).toContain('<option value="added" selected>');
       expect(fallbackBody).not.toContain("ignored=value");
 
+      for (const field of ["filter", "order"] as const) {
+        const response = await fetch(`${base}/?${field}=toString`);
+        expect(response.status).toBe(200);
+        const body = await response.text();
+        expect(body).toContain('<option value="all" selected>');
+        expect(body).toContain('<option value="added" selected>');
+        expect(body).toContain('action="/books?filter=all&amp;order=added"');
+      }
+
       const titleBody = await (await fetch(`${base}/?order=title`)).text();
       expect(titleBody.indexOf("apple")).toBeLessThan(titleBody.indexOf("Middle"));
       expect(titleBody.indexOf("Middle")).toBeLessThan(titleBody.indexOf("Zebra"));
