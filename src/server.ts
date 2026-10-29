@@ -3,6 +3,7 @@ import { openShelf } from "./db";
 import { page } from "./views";
 
 const publicDir = join(import.meta.dir, "..", "public");
+const maxBookFieldLength = 200;
 const html = (body: string, status = 200) =>
   new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8" } });
 const redirect = () => Response.redirect("/", 303);
@@ -23,7 +24,13 @@ export function startServer(options: { port?: number; dbPath?: string } = {}) {
         const title = String(form.get("title") ?? "").trim();
         const author = String(form.get("author") ?? "").trim();
         if (!title || !author) return html(page(shelf.list(), "Title and author are required."), 400);
-        shelf.add(title.slice(0, 200), author.slice(0, 200));
+        if (title.length > maxBookFieldLength) {
+          return html(page(shelf.list(), "Title must be 200 characters or fewer."), 400);
+        }
+        if (author.length > maxBookFieldLength) {
+          return html(page(shelf.list(), "Author must be 200 characters or fewer."), 400);
+        }
+        shelf.add(title, author);
         return redirect();
       }
 
