@@ -13,7 +13,7 @@ export function page(books: Book[], error = "") {
     .map(
       (book) => `<li class="book${book.read ? " is-read" : ""}">
         <form method="post" action="/books/${book.id}/toggle">
-          <button class="check" aria-label="Mark ${escapeHtml(book.title)} as ${book.read ? "unread" : "read"}">${book.read ? "✓" : ""}</button>
+          <button class="check" aria-label="Mark ${escapeHtml(book.title)} as ${book.read ? "unread" : "read"} (book ${book.id})">${book.read ? "✓" : ""}</button>
         </form>
         <div><strong>${escapeHtml(book.title)}</strong><span>${escapeHtml(book.author)}</span></div>
         <form method="post" action="/books/${book.id}/delete" class="delete-form">
