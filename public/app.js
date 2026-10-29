@@ -2,12 +2,7 @@ let pendingMutation = Promise.resolve();
 
 document.addEventListener("submit", async (event) => {
   const form = event.target;
-  if (
-    !(form instanceof HTMLFormElement) ||
-    form.method !== "post" ||
-    !form.matches(".add, .book form")
-  )
-    return;
+  if (!(form instanceof HTMLFormElement) || form.method !== "post") return;
 
   if (form.classList.contains("delete-form") && !confirm("Remove this book from your shelf?")) {
     event.preventDefault();
