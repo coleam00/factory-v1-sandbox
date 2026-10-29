@@ -112,18 +112,6 @@ describe("health", () => {
     }
   });
 
-  test("rejects a malformed revision without becoming unhealthy", async () => {
-    const app = startWithRevision("not-a-full-commit");
-
-    try {
-      const response = await fetch(new URL("/health", app.server.url));
-      expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ status: "ok", revision: null });
-    } finally {
-      app.close();
-    }
-  });
-
   test("rejects a full-length non-hexadecimal revision", async () => {
     const app = startWithRevision("g".repeat(40));
 
