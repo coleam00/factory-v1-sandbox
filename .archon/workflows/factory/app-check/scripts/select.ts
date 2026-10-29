@@ -18,7 +18,8 @@ if (import.meta.main) {
     ? [ghJson(["pr", "view", requested, "--repo", repo, "--json", fields]) as Candidate]
     : ghJson(["pr", "list", "--repo", repo, "--state", "open", "--limit", "100", "--json", fields]) as Candidate[];
   const finals = new Set(requested ? [] : rows.filter(row => hasFinal(repo, row.headRefOid)).map(row => row.headRefOid));
-  const picked = oldestUnchecked(rows, finals);
+  // A PR named by the operator is checked even as a draft; only the automatic pick skips drafts.
+  const picked = requested ? (rows[0]?.state === "OPEN" ? rows[0] : null) : oldestUnchecked(rows, finals);
   if (!picked) emit({ found: false, pr: null, head: "", files: [], base: "", issue: null, issue_body: "", issue_labels: [] });
   else {
     const issue = linkedIssue(picked.body);
