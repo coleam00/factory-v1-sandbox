@@ -62,18 +62,22 @@ describe("database", () => {
     db.close();
   });
 
-  test("rejects legacy books with empty titles when listing", () => {
+  test("rejects legacy books with normalized-empty titles when listing", () => {
     const directory = mkdtempSync(join(tmpdir(), "shelf-legacy-title-"));
     try {
-      for (const read of [0, 1]) {
-        const path = join(directory, `read-${read}.db`);
+      for (const [title, read] of [
+        ["", 0],
+        ["", 1],
+        ["   ", 0],
+      ] as const) {
+        const path = join(directory, `title-${title.length}-read-${read}.db`);
         const current = openShelf(path);
         current.close();
 
         const legacy = new Database(path);
         legacy
-          .query("INSERT INTO books (title, author, read) VALUES ('', 'Nobody', ?)")
-          .run(read);
+          .query("INSERT INTO books (title, author, read) VALUES (?, 'Nobody', ?)")
+          .run(title, read);
         legacy.close();
 
         const reopened = openShelf(path);
