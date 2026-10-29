@@ -15,8 +15,8 @@ button { border: 0; border-radius: 8px; cursor: pointer; font: inherit; font-wei
 section { margin-top: 34px; }
 h2 { margin-bottom: 12px; font-size: 15px; text-transform: uppercase; letter-spacing: .12em; color: #71756d; }
 ul { list-style: none; padding: 0; margin: 0; border-top: 1px solid #d5d1c5; }
-.book { display: grid; grid-template-columns: auto 1fr auto; gap: 14px; align-items: center; padding: 16px 4px; border-bottom: 1px solid #d5d1c5; }
-.book strong, .book span { display: block; }
+.book { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px; align-items: center; padding: 16px 4px; border-bottom: 1px solid #d5d1c5; }
+.book strong, .book span { display: block; overflow-wrap: anywhere; }
 .book span { margin-top: 3px; font-size: 14px; }
 .check { width: 26px; height: 26px; padding: 0; border: 2px solid #8a8f85; border-radius: 50%; background: transparent; color: white; }
 .is-read .check { background: #477253; border-color: #477253; }
