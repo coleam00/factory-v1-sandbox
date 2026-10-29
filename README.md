@@ -20,6 +20,8 @@ bun test
 bun run typecheck
 ```
 
+The responsive browser test uses an installed Chrome or Chromium. Set `CHROME_PATH` when its executable is not in a standard system location.
+
 ## Factory
 
 This repository adopts the project-scoped factory package alongside Archon's bundled SDLC pack. It does not copy or override files under `.archon/workflows/sdlc/`.
