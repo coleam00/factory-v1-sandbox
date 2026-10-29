@@ -25,11 +25,13 @@ class TestHtmlFormElement {
   }
 }
 
-class TestFormData {
+class TestFormData extends FormData {
   readonly fields: Record<string, string>;
 
   constructor(form: TestHtmlFormElement) {
+    super();
     this.fields = Object.fromEntries(form.controls.map(({ name, value }) => [name, value]));
+    for (const [name, value] of Object.entries(this.fields)) this.append(name, value);
   }
 }
 
@@ -193,7 +195,7 @@ function serverBackedClient(
     requests.push(url);
     return fetch(new URL(new URL(url).pathname, app.server.url), {
       method: options.method,
-      body: new URLSearchParams(options.body.fields),
+      body: options.body,
     });
   });
 }
@@ -231,30 +233,36 @@ describe("browser shelf mutations", () => {
     }
   });
 
-  test("freezes an add payload at submission", async () => {
+  test("serializes overlapping add, toggle, and delete mutations", async () => {
     const existing = book(1, "Kindred");
+    const added = book(2, "Submitted title");
     const initialPage = page([existing]);
-    const firstResponse = deferred<Response>();
+    const toggleResponse = deferred<Response>();
+    const addResponse = deferred<Response>();
+    const deleteResponse = deferred<Response>();
     const requests: Array<{ url: string; body: Record<string, string> }> = [];
     const client = clientHarness(initialPage, (url, options) => {
       requests.push({ url, body: options.body.fields });
-      return url.endsWith("/toggle")
-        ? firstResponse.promise
-        : Promise.resolve(new Response(page([book(2, "Submitted title"), existing])));
+      if (url.endsWith("/toggle")) return toggleResponse.promise;
+      if (url.endsWith("/delete")) return deleteResponse.promise;
+      return addResponse.promise;
     });
     const toggle = new TestSubmitEvent(renderedForm(initialPage, "/books/1/toggle"));
     const addForm = renderedForm(initialPage, "/books");
     addForm.setValue("Title", "Submitted title");
     addForm.setValue("Author", "Submitted author");
     const add = new TestSubmitEvent(addForm);
+    const remove = new TestSubmitEvent(renderedForm(initialPage, "/books/1/delete"));
 
-    const firstSubmission = client.submit(toggle);
+    const toggleSubmission = client.submit(toggle);
     const addSubmission = client.submit(add);
+    const deleteSubmission = client.submit(remove);
     addForm.setValue("Title", "Edited after submit");
     addForm.setValue("Author", "Edited author");
-    firstResponse.resolve(new Response(page([existing])));
-    await firstSubmission;
-    await addSubmission;
+    deleteResponse.resolve(new Response(page([added])));
+    addResponse.resolve(new Response(page([added, { ...existing, read: true }])));
+    toggleResponse.resolve(new Response(page([{ ...existing, read: true }])));
+    await Promise.all([toggleSubmission, addSubmission, deleteSubmission]);
 
     expect(requests).toEqual([
       { url: `${origin}/books/1/toggle`, body: {} },
@@ -262,7 +270,12 @@ describe("browser shelf mutations", () => {
         url: `${origin}/books`,
         body: { title: "Submitted title", author: "Submitted author" },
       },
+      { url: `${origin}/books/1/delete`, body: {} },
     ]);
+    expect(client.document.currentMain.markup).toContain("Submitted title");
+    expect(client.document.currentMain.markup).toContain("<b>0</b> of 1 read");
+    expect(client.document.currentMain.markup).not.toContain("Kindred");
+    expect(client.reloads()).toBe(0);
   });
 
   test("confirms a rendered delete before submitting it", async () => {
