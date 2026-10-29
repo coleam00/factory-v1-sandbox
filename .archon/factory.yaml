@@ -1,0 +1,15 @@
+app_check:
+  enabled: true
+  trigger: frontend
+  frontend_paths: ["public/**", "src/views.ts", "src/**/*.css"]
+  depth: auto
+holdouts:
+  enabled: true
+  dir: ~/.archon-v1test/holdouts/factory-v1-sandbox
+protected_paths: [".archon/**", ".github/**"]
+human_in_the_loop: standard
+app:
+  start: "bun src/server.ts"
+  port_env: PORT
+  db_env: SHELF_DB
+  health_path: "/"

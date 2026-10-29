@@ -1,0 +1,26 @@
+config:
+  app_check: { enabled: true, trigger: frontend, frontend_paths: ["public/**"], depth: auto }
+  holdouts: { enabled: true, dir: ~/.archon-v1test/holdouts/test }
+  protected_paths: [".archon/**"]
+  human_in_the_loop: standard
+  app: { start: "bun src/server.ts", port_env: PORT, db_env: SHELF_DB, health_path: "/" }
+select: { found: true, pr: 8, head: bad123, files: ["src/views.ts"], base: main, issue: 12, issue_body: "## Acceptance\n- [ ] works", issue_labels: [archon-size-l] }
+pending: { posted: true }
+scope: { run: true, depth: deep, reason: selected }
+policy: { ok: true, protected_files: [], description: policy clear }
+prepare: { temp: "/tmp/factory-fail", merged: bad456, prepared_at: 1000 }
+check:
+  overall: FAIL
+  lines: ["C1  FAIL  Remove does not update the list.  evidence: remove.png"]
+  summary: Remove failed.
+evidence:
+  overall: FAIL
+  lines: ["C1  FAIL  Remove does not update the list.  evidence: remove.png"]
+  report: "# App check\nC1  FAIL  Remove does not update the list.  evidence: remove.png"
+publish: { state: failure, comment: updated }
+cleanup: { cleaned: true, pid_file: true }
+fixture:
+  inputs: { repo_path: example/shelf, pr: "8" }
+  expect: completed
+  reached: [config, select, pending, scope, policy, prepare, check, evidence, publish, cleanup]
+exec-code: true

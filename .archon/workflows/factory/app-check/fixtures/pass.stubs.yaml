@@ -1,0 +1,26 @@
+config: &config
+  app_check: { enabled: true, trigger: frontend, frontend_paths: ["public/**"], depth: auto }
+  holdouts: { enabled: true, dir: ~/.archon-v1test/holdouts/test }
+  protected_paths: [".archon/**"]
+  human_in_the_loop: standard
+  app: { start: "bun src/server.ts", port_env: PORT, db_env: SHELF_DB, health_path: "/" }
+select: { found: true, pr: 7, head: abc123, files: ["public/app.css"], base: main, issue: 11, issue_body: "## Acceptance\n- [ ] works", issue_labels: [archon-size-m] }
+pending: { posted: true }
+scope: { run: true, depth: normal, reason: selected }
+policy: { ok: true, protected_files: [], description: policy clear }
+prepare: { temp: "/tmp/factory-pass", merged: def456, prepared_at: 1000 }
+check:
+  overall: PASS
+  lines: ["C1  PASS  The add flow works.  evidence: add.png"]
+  summary: Checked the add flow.
+evidence:
+  overall: PASS
+  lines: ["C1  PASS  The add flow works.  evidence: add.png"]
+  report: "# App check\nC1  PASS  The add flow works.  evidence: add.png"
+publish: { state: success, comment: created }
+cleanup: { cleaned: true, pid_file: true }
+fixture:
+  inputs: { repo_path: example/shelf, pr: "7" }
+  expect: completed
+  reached: [config, select, pending, scope, policy, prepare, check, evidence, publish, cleanup]
+exec-code: true

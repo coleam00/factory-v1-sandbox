@@ -1,0 +1,16 @@
+config:
+  app_check: { enabled: true, trigger: frontend, frontend_paths: ["public/**", "src/views.ts"], depth: auto }
+  holdouts: { enabled: true, dir: ~/.archon-v1test/holdouts/test }
+  protected_paths: [".archon/**"]
+  human_in_the_loop: standard
+  app: { start: "bun src/server.ts", port_env: PORT, db_env: SHELF_DB, health_path: "/" }
+select: { found: true, pr: 9, head: doc123, files: ["README.md"], base: main, issue: 13, issue_body: "", issue_labels: [archon-size-s] }
+pending: { posted: true }
+scope: { run: false, depth: light, reason: "skipped: no front-end change" }
+policy: { ok: true, protected_files: [], description: policy clear }
+cleanup: { cleaned: false, pid_file: false }
+fixture:
+  inputs: { repo_path: example/shelf, pr: "9" }
+  expect: completed
+  reached: [config, select, pending, scope, policy, cleanup]
+exec-code: true
