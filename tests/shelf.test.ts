@@ -17,6 +17,28 @@ describe("database", () => {
     expect(db.list()).toEqual([]);
     db.close();
   });
+
+  test("keeps generated and listed IDs exact above the safe-integer boundary", () => {
+    const directory = mkdtempSync(join(tmpdir(), "shelf-test-"));
+    const dbPath = join(directory, "shelf.db");
+    const db = openShelf(dbPath);
+    const inspectionDb = new Database(dbPath);
+    const adjacentId = "9007199254740992";
+    const targetId = "9007199254740993";
+
+    try {
+      inspectionDb
+        .query("INSERT INTO books (id, title, author) VALUES (?, ?, ?)")
+        .run(BigInt(adjacentId), "Adjacent", "Exact ID");
+
+      expect(db.add("Target", "Exact ID")).toBe(targetId);
+      expect(db.list().map((book) => book.id)).toEqual([targetId, adjacentId]);
+    } finally {
+      inspectionDb.close();
+      db.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("HTTP routes", () => {
@@ -68,13 +90,15 @@ describe("HTTP routes", () => {
       const dbPath = join(directory, "shelf.db");
       const isolatedApp = startServer({ port: 0, dbPath });
       const inspectionDb = new Database(dbPath);
-      const largeId = "9007199254740992";
-      const missingId = "9007199254740993";
+      const adjacentId = "9007199254740992";
+      const targetId = "9007199254740993";
+      const missingId = "9007199254740994";
       const insert = inspectionDb.query(
         "INSERT INTO books (id, title, author) VALUES (?, ?, ?)",
       );
       insert.run(1, "Control", "Still Here");
-      insert.run(BigInt(largeId), "Large", "Exact ID");
+      insert.run(BigInt(adjacentId), "Adjacent", "Must Not Change");
+      insert.run(BigInt(targetId), "Target", "Exact ID");
       const books = () =>
         inspectionDb
           .query<
@@ -94,7 +118,17 @@ describe("HTTP routes", () => {
         expect(missing.status).toBe(404);
         expect(books()).toEqual(before);
 
-        const existing = await fetch(`${isolatedApp.server.url}books/${largeId}/${action}`, {
+        const body = await (await fetch(isolatedApp.server.url)).text();
+        const targetRow = body
+          .match(/<li class="book[^>]*>[\s\S]*?<\/li>/g)
+          ?.find((row) => row.includes("<strong>Target</strong>"));
+        const targetAction = targetRow?.match(
+          new RegExp(`action="([^"]+/${action})"`),
+        )?.[1];
+        expect(targetAction).toBe(`/books/${targetId}/${action}`);
+        if (!targetAction) throw new Error("Target form action is missing");
+
+        const existing = await fetch(new URL(targetAction, isolatedApp.server.url), {
           method: "POST",
           redirect: "manual",
         });
@@ -103,10 +137,11 @@ describe("HTTP routes", () => {
         if (action === "toggle") {
           expect(books()).toEqual([
             before[0],
-            { ...before[1], read: 1 },
+            before[1],
+            { ...before[2], read: 1 },
           ]);
         } else {
-          expect(books()).toEqual([before[0]]);
+          expect(books()).toEqual([before[0], before[1]]);
         }
       } finally {
         inspectionDb.close();
