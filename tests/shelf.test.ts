@@ -34,12 +34,16 @@ describe("HTTP routes", () => {
 
   test("renders, creates, toggles, and deletes a book", async () => {
     let response = await fetch(base);
-    expect(await response.text()).toContain("<b>0</b> of 0 read");
+    let body = await response.text();
+    expect(body).toContain("<b>0</b> of 0 read");
+    expect(body).toContain('<input name="title" required');
+    expect(body).toContain('<input name="author" required');
+    expect(body).not.toContain("maxlength");
 
     response = await addBook("Kindred", "Octavia E. Butler");
     expect(response.status).toBe(303);
 
-    let body = await (await fetch(base)).text();
+    body = await (await fetch(base)).text();
     expect(body).toContain("Kindred");
     expect(body).toContain("<b>0</b> of 1 read");
 

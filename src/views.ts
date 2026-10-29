@@ -1,4 +1,4 @@
-import { maxBookFieldLength } from "./book";
+import { bookFormFields } from "./book";
 import type { Book } from "./db";
 
 const escapeHtml = (value: string) =>
@@ -30,8 +30,8 @@ export function page(books: Book[], error = "") {
 <body><main>
   <header><div><h1>Shelf</h1><p>Your personal reading list</p></div><div class="count"><b>${read}</b> of ${books.length} read</div></header>
   <form class="add" method="post" action="/books">
-    <label>Title<input name="title" required maxlength="${maxBookFieldLength}" placeholder="The Left Hand of Darkness"></label>
-    <label>Author<input name="author" required maxlength="${maxBookFieldLength}" placeholder="Ursula K. Le Guin"></label>
+    <label>Title<input name="${bookFormFields.title}" required placeholder="The Left Hand of Darkness"></label>
+    <label>Author<input name="${bookFormFields.author}" required placeholder="Ursula K. Le Guin"></label>
     <button>Add book</button>
   </form>
   ${error ? `<p class="error" role="alert">${escapeHtml(error)}</p>` : ""}

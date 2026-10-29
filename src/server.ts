@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { maxBookFieldLength } from "./book";
+import { bookFormFields, maxBookFieldLength } from "./book";
 import { openShelf } from "./db";
 import { page } from "./views";
 
@@ -21,8 +21,8 @@ export function startServer(options: { port?: number; dbPath?: string } = {}) {
       }
       if (request.method === "POST" && url.pathname === "/books") {
         const form = await request.formData();
-        const title = String(form.get("title") ?? "").trim();
-        const author = String(form.get("author") ?? "").trim();
+        const title = String(form.get(bookFormFields.title) ?? "").trim();
+        const author = String(form.get(bookFormFields.author) ?? "").trim();
         if (!title || !author) return html(page(shelf.list(), "Title and author are required."), 400);
         if (title.length > maxBookFieldLength) {
           return html(
