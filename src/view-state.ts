@@ -65,7 +65,7 @@ const query = (view: ViewState) => new URLSearchParams(view).toString();
 export const viewQuery = (view: ViewState) => `?${query(view).replaceAll("&", "&amp;")}`;
 
 export const viewLocation = (url: URL, view: ViewState) => {
-  const hasViewState = url.searchParams.has("filter") || url.searchParams.has("order");
+  const hasViewState = Object.keys(viewFields).some((field) => url.searchParams.has(field));
   return hasViewState ? `/?${query(view)}` : "/";
 };
 

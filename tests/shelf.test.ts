@@ -95,6 +95,30 @@ describe("HTTP routes", () => {
 });
 
 describe("shelf view", () => {
+  test("retains each view field independently through mutation redirects", async () => {
+    const app = startServer({ port: 0, dbPath: ":memory:" });
+    const base = app.server.url.origin;
+    const cases = [
+      ["filter=unread", "/?filter=unread&order=added"],
+      ["order=title", "/?filter=all&order=title"],
+    ] as const;
+
+    try {
+      for (const [query, location] of cases) {
+        const response = await fetch(`${base}/books?${query}`, {
+          method: "POST",
+          body: new URLSearchParams({ title: query, author: "View tester" }),
+          redirect: "manual",
+        });
+
+        expect(response.status).toBe(303);
+        expect(response.headers.get("location")).toBe(location);
+      }
+    } finally {
+      app.close();
+    }
+  });
+
   test("filters, orders, and retains the active view through mutations", async () => {
     const app = startServer({ port: 0, dbPath: ":memory:" });
     const base = app.server.url.origin;
