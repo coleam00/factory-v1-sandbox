@@ -49,30 +49,59 @@ describe("HTTP routes", () => {
     let response = await fetch(base);
     let body = await response.text();
     expect(body).toContain("<b>0</b> of 0 read");
-    const skipLinks = [
-      ...body.matchAll(
-        /<a class="skip-link" href="#([^"]+)">Skip to books<\/a>/g,
-      ),
-    ];
-    expect(skipLinks).toHaveLength(1);
-    const targetId = decodeURIComponent(skipLinks[0]![1]!);
-    const renderedIdAttributes: string[] = [];
+    const skipLinks: { href: string | null; text: string }[] = [];
+    const renderedIdOwners: {
+      id: string;
+      tagName: string;
+      tabindex: string | null;
+    }[] = [];
     const parsedBody = new HTMLRewriter()
+      .on("a.skip-link", {
+        element(element) {
+          skipLinks.push({ href: element.getAttribute("href"), text: "" });
+        },
+        text(text) {
+          skipLinks.at(-1)!.text += text.text;
+        },
+      })
       .on("[id]", {
         element(element) {
           const id = element.getAttribute("id");
-          if (id !== null) renderedIdAttributes.push(id);
+          if (id === null) return;
+          renderedIdOwners.push({
+            id: decodeNumericCharacterReferences(id),
+            tagName: element.tagName,
+            tabindex: element.getAttribute("tabindex"),
+          });
         },
       })
       .transform(new Response(body));
     await parsedBody.text();
-    const renderedIds = renderedIdAttributes.map(
-      decodeNumericCharacterReferences,
-    );
-    expect(renderedIds.filter((id) => id === targetId)).toHaveLength(1);
-    expect(body).toContain(
-      `<section id="${targetId}" tabindex="-1"><h2>Books</h2>`,
-    );
+    expect(skipLinks).toHaveLength(1);
+    expect(skipLinks[0]!.text.trim()).toBe("Skip to books");
+    expect(skipLinks[0]!.href?.[0]).toBe("#");
+    const targetId = decodeURIComponent(skipLinks[0]!.href!.slice(1));
+    const targetOwners = renderedIdOwners.filter(({ id }) => id === targetId);
+    expect(targetOwners).toHaveLength(1);
+    expect(targetOwners[0]).toMatchObject({
+      tagName: "section",
+      tabindex: "-1",
+    });
+
+    const targetHeadings: string[] = [];
+    let currentHeading = -1;
+    const parsedHeadings = new HTMLRewriter()
+      .on(`[id="${targetId}"] > h2`, {
+        element() {
+          currentHeading = targetHeadings.push("") - 1;
+        },
+        text(text) {
+          targetHeadings[currentHeading] += text.text;
+        },
+      })
+      .transform(new Response(body));
+    await parsedHeadings.text();
+    expect(targetHeadings.map((heading) => heading.trim())).toEqual(["Books"]);
 
     response = await fetch(`${base}/books`, {
       method: "POST",
