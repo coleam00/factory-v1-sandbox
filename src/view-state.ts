@@ -36,11 +36,6 @@ export type ViewState = {
   >;
 };
 
-export const defaultView: ViewState = {
-  filter: viewFields.filter.defaultValue,
-  order: viewFields.order.defaultValue,
-};
-
 const hasOption = <Options extends object>(
   options: Options,
   value: string | null,

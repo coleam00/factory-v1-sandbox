@@ -1,7 +1,6 @@
 import type { Book } from "./db";
 import {
   applyView,
-  defaultView,
   viewFields,
   viewQuery,
   type ViewState,
@@ -27,7 +26,7 @@ const optionTags = (
 
 export function page(
   books: Book[],
-  view: ViewState = defaultView,
+  view: ViewState,
   error = "",
 ) {
   const read = books.filter((book) => book.read).length;
