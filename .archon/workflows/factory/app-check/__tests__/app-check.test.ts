@@ -15,11 +15,12 @@ import { delimiter, join } from "node:path";
 
 describe("app-check deterministic decisions", () => {
   test("matches anchored frontend globs", () => {
-    expect(matchingFiles(["src/a/site.css", "src/views.ts", "src/server.ts"], DEFAULTS.app_check.frontend_paths)).toEqual(["src/a/site.css", "src/views.ts"]);
+    expect(matchingFiles(["src/a/site.css", "app/views.ts", "src/server.ts"], DEFAULTS.app_check.frontend_paths)).toEqual(["src/a/site.css", "app/views.ts"]);
   });
   test("uses size labels for auto depth and skips backend-only changes", () => {
-    expect(scopeDecision(DEFAULTS, ["src/server.ts"], ["archon-size-l"])).toEqual({ run: false, depth: "deep", reason: "skipped: no front-end change" });
-    expect(scopeDecision(DEFAULTS, ["public/app.css"], ["archon-size-s"]).depth).toBe("light");
+    const enabled = { ...DEFAULTS, app_check: { ...DEFAULTS.app_check, enabled: true } };
+    expect(scopeDecision(enabled, ["src/server.ts"], ["archon-size-l"])).toEqual({ run: false, depth: "deep", reason: "skipped: no front-end change" });
+    expect(scopeDecision(enabled, ["public/app.css"], ["archon-size-s"]).depth).toBe("light");
   });
   test("selects a draft before delivery marks it ready and skips only the exact tested binding", () => {
     const row = (number: number, createdAt: string, isDraft = false, baseRefOid = "base-a") => ({ number, createdAt, isDraft, headRefOid: `h${number}`, baseRefName: "main", baseRefOid, files: [], body: "" });
@@ -69,11 +70,11 @@ describe("app-check deterministic decisions", () => {
   test("turns an abandoned pending check into failure", () => {
     const root = mkdtempSync(join(tmpdir(), "factory-finalize-test-"));
     mkdirSync(root, { recursive: true });
-    writeFileSync(join(root, "pending.json"), JSON.stringify({ repo: "example/shelf", head: "head-a", base: "main", base_oid: "base-a" }));
+    writeFileSync(join(root, "pending.json"), JSON.stringify({ repo: "example/widgets", head: "head-a", base: "main", base_oid: "base-a" }));
     const calls: unknown[][] = [];
     expect(finalizePending(root, (...args) => { calls.push(args); })).toBe(true);
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.slice(0, 4)).toEqual(["example/shelf", "head-a", "failure", "factory/app-check"]);
+    expect(calls[0]?.slice(0, 4)).toEqual(["example/widgets", "head-a", "failure", "factory/app-check"]);
     expect(existsSync(join(root, "terminal.json"))).toBe(true);
     expect(finalizePending(root, (...args) => { calls.push(args); })).toBe(false);
     expect(calls).toHaveLength(1);

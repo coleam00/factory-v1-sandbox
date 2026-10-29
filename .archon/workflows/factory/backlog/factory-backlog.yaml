@@ -19,7 +19,7 @@ nodes:
   - id: slice
     command: slice
     depends_on: [read]
-    model: large
+    model: ['@factory-planner', large]
     mutates_checkout: false
     with: { prd: "$read.output.path", repo_path: "$INPUTS.repo_path" }
     output_format:

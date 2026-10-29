@@ -1,15 +1,43 @@
+# Project-owned factory settings. Run factory-setup after editing.
+project:
+  repo_host: github.com
+  repo_path: coleam00/factory-v1-sandbox
+
 app_check:
   enabled: true
   trigger: frontend
   frontend_paths: ["public/**", "src/views.ts", "src/**/*.css"]
   depth: auto
+
+# Keep private scenarios outside the repository. Do not inspect them during implementation.
 holdouts:
   enabled: true
-  dir: ~/.archon-v1test/holdouts/factory-v1-sandbox
-protected_paths: [".archon/**", ".github/**"]
-human_in_the_loop: standard
+  path: C:/Users/colem/.archon-v1test/holdouts/factory-v1-sandbox
+
+protected_paths: [".archon/**", ".github/**", "DEPLOY.md"]
+autonomy: standard
+
 app:
+  prepare: "bun install --frozen-lockfile"
   start: "bun src/server.ts"
   port_env: PORT
-  db_env: SHELF_DB
-  health_path: "/"
+  database_env: SHELF_DB
+  health_path: /
+
+# Inherit tiers and aliases from the sandbox Archon home.
+models:
+  assistant: codex
+  tiers: {}
+  aliases: {}
+
+# The root operator owns the existing external timer configurations and schedules.
+# Setup must not generate, install, register, or fire timers for this checkout.
+triggers:
+  enabled: false
+  host_id: ""
+  run_as_user_id: ""
+  build_queue: { interval_seconds: 1800 }
+  merge_queue: { interval_seconds: 1800 }
+  discoveries: { interval_seconds: 14400 }
+  manager: { interval_seconds: 14400 }
+  app_check: { interval_seconds: 1800 }

@@ -8,7 +8,7 @@ mutates_checkout: false
 nodes:
   - id: manage
     command: manage
-    model: medium
+    model: ['@factory-manager', medium]
     mutates_checkout: false
     with: { repo_path: "$INPUTS.repo_path" }
     output_format:
