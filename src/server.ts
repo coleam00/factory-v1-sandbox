@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { createHealthResponse, parseFullCommitSha } from "../contracts/health";
 import { openShelf } from "./db";
 import { page } from "./views";
 
@@ -6,11 +7,9 @@ const publicDir = join(import.meta.dir, "..", "public");
 const html = (body: string, status = 200) =>
   new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8" } });
 const redirect = () => Response.redirect("/", 303);
-const normalizeRevision = (revision: string | undefined) =>
-  revision && /^[0-9a-f]{40}$/i.test(revision) ? revision.toLowerCase() : null;
 
 export function startServer(options: { port?: number; dbPath?: string } = {}) {
-  const revision = normalizeRevision(process.env.APP_REVISION);
+  const revision = parseFullCommitSha(process.env.APP_REVISION);
   const shelf = openShelf(options.dbPath);
   const server = Bun.serve({
     port: options.port ?? Number(process.env.PORT ?? 3000),
@@ -18,7 +17,7 @@ export function startServer(options: { port?: number; dbPath?: string } = {}) {
       const url = new URL(request.url);
 
       if (request.method === "GET" && url.pathname === "/health") {
-        return Response.json({ status: "ok", revision });
+        return Response.json(createHealthResponse(revision));
       }
       if (request.method === "GET" && url.pathname === "/") return html(page(shelf.list()));
       if (request.method === "GET" && (url.pathname === "/app.js" || url.pathname === "/style.css")) {

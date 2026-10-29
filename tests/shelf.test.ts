@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { readHealthResponse } from "../.archon/workflows/factory/deploy/scripts/read-health";
+import { decodeHealthResponse } from "../contracts/health";
 import { openShelf } from "../src/db";
 import { startServer } from "../src/server";
 
@@ -74,11 +76,18 @@ describe("HTTP routes", () => {
 });
 
 describe("health", () => {
-  test("reports an absent revision without changing the empty shelf", async () => {
+  test("reports an absent revision without changing a populated shelf", async () => {
     const app = startWithRevision();
 
     try {
+      const created = await fetch(new URL("/books", app.server.url), {
+        method: "POST",
+        body: new URLSearchParams({ title: "Parable of the Sower", author: "Octavia E. Butler" }),
+        redirect: "manual",
+      });
+      expect(created.status).toBe(303);
       const before = await (await fetch(app.server.url)).text();
+      expect(before).toContain("Parable of the Sower");
       const response = await fetch(new URL("/health", app.server.url));
 
       expect(response.status).toBe(200);
@@ -94,10 +103,7 @@ describe("health", () => {
     const app = startWithRevision("ABCDEF0123456789ABCDEF0123456789ABCDEF01");
 
     try {
-      const response = await fetch(new URL("/health", app.server.url));
-      expect(response.status).toBe(200);
-      expect(response.headers.get("content-type")).toStartWith("application/json");
-      expect(await response.json()).toEqual({
+      expect(await readHealthResponse(new URL("/health", app.server.url))).toEqual({
         status: "ok",
         revision: "abcdef0123456789abcdef0123456789abcdef01",
       });
@@ -127,6 +133,67 @@ describe("health", () => {
       expect(await response.json()).toEqual({ status: "ok", revision: null });
     } finally {
       app.close();
+    }
+  });
+
+  test("preserves a configured lowercase full revision", async () => {
+    const revision = "0123456789abcdef0123456789abcdef01234567";
+    const app = startWithRevision(revision);
+
+    try {
+      const response = await fetch(new URL("/health", app.server.url));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ status: "ok", revision });
+    } finally {
+      app.close();
+    }
+  });
+
+  test.each([39, 41])("rejects a %i-character hexadecimal revision", async length => {
+    const app = startWithRevision("a".repeat(length));
+
+    try {
+      const response = await fetch(new URL("/health", app.server.url));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ status: "ok", revision: null });
+    } finally {
+      app.close();
+    }
+  });
+
+  test("rejects invalid health payloads", () => {
+    const invalidPayloads = [
+      null,
+      [],
+      { status: "ok" },
+      { status: "ok", revision: null, extra: true },
+      { status: "down", revision: null },
+      { status: "ok", revision: 1 },
+      { status: "ok", revision: "ABCDEF0123456789ABCDEF0123456789ABCDEF01" },
+    ];
+
+    for (const payload of invalidPayloads) {
+      expect(() => decodeHealthResponse(payload)).toThrow();
+    }
+  });
+
+  test("deployment readback rejects invalid HTTP status and media type", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        return new URL(request.url).pathname === "/status"
+          ? Response.json({ status: "ok", revision: null }, { status: 503 })
+          : new Response('{"status":"ok","revision":null}', {
+              headers: { "content-type": "text/plain" },
+            });
+      },
+    });
+
+    try {
+      await expect(readHealthResponse(new URL("/status", server.url))).rejects.toThrow("HTTP 503");
+      await expect(readHealthResponse(new URL("/media-type", server.url))).rejects.toThrow("application/json");
+    } finally {
+      server.stop(true);
     }
   });
 });
