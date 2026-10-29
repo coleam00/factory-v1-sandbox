@@ -12,11 +12,16 @@ class TestHtmlFormElement {
     readonly action: string,
     readonly classes: Set<string>,
     readonly controls: Array<{ label: string; name: string; value: string }>,
+    private readonly insideBook: boolean,
   ) {}
 
   readonly classList = {
     contains: (name: string) => this.classes.has(name),
   };
+
+  matches(selector: string) {
+    return selector === ".add, .book form" && (this.classes.has("add") || this.insideBook);
+  }
 
   setValue(label: string, value: string) {
     const control = this.controls.find((candidate) => candidate.label === label);
@@ -116,6 +121,7 @@ function renderedForm(html: string, action: string) {
   const openingTag = html.slice(start, openingEnd + 1);
   const formMarkup = html.slice(start, end + "</form>".length);
   const classes = new Set((attribute(openingTag, "class") ?? "").split(/\s+/).filter(Boolean));
+  const insideBook = html.lastIndexOf('<li class="book', start) > html.lastIndexOf("</li>", start);
   const controls = [...formMarkup.matchAll(/<input\b[^>]*>/g)].flatMap((match) => {
     const name = attribute(match[0], "name");
     if (!name) return [];
@@ -129,6 +135,7 @@ function renderedForm(html: string, action: string) {
     new URL(action, origin).href,
     classes,
     controls,
+    insideBook,
   );
 }
 
