@@ -13,6 +13,8 @@ bun run dev
 
 Open <http://localhost:3000>. Use `PORT` to choose another port and `SHELF_DB` to choose another database path (the default is `shelf.db`). For a non-watching process, run `bun start`.
 
+`GET /health` reports whether Shelf is serving and returns the deployed revision when `APP_REVISION` is set to a full 40-character commit SHA before startup.
+
 ## Test
 
 ```sh
