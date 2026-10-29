@@ -27,7 +27,7 @@ export function startServer(options: { port?: number; dbPath?: string } = {}) {
         return redirect();
       }
 
-      const match = url.pathname.match(/^\/books\/(\d+)\/(toggle|delete)$/);
+      const match = url.pathname.match(/^\/books\/(-?\d+)\/(toggle|delete)$/);
       if (request.method === "POST" && match) {
         const id = BigInt(match[1]);
         match[2] === "toggle" ? shelf.toggle(id) : shelf.remove(id);

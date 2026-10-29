@@ -318,7 +318,7 @@ describe("browser shelf mutations", () => {
     expect(client.reloads()).toBe(0);
   });
 
-  test("preserves exact large IDs through rendered toggle and delete mutations", async () => {
+  test("preserves exact signed and large IDs through rendered toggle and delete mutations", async () => {
     const directory = await mkdtemp(join(tmpdir(), "shelf-large-ids-"));
     const dbPath = join(directory, "shelf.db");
     const schema = openShelf(dbPath);
@@ -330,6 +330,9 @@ describe("browser shelf mutations", () => {
     seed
       .query("INSERT INTO books (id, title, author) VALUES (?, ?, ?)")
       .run(9007199254740993n, "Second adjacent ID", "Test Author");
+    seed
+      .query("INSERT INTO books (id, title, author) VALUES (?, ?, ?)")
+      .run(-1n, "Negative ID", "Test Author");
     seed.close();
 
     const app = startServer({ port: 0, dbPath });
@@ -344,12 +347,42 @@ describe("browser shelf mutations", () => {
       expect(renderedBook(initialPage, "Second adjacent ID")).toContain(
         'action="/books/9007199254740993/toggle"',
       );
-
-      await client.submit(
-        new TestSubmitEvent(renderedForm(initialPage, "/books/9007199254740993/toggle")),
+      expect(renderedBook(initialPage, "Negative ID")).toContain(
+        'action="/books/-1/toggle"',
       );
 
-      expect(requests).toEqual([`${origin}/books/9007199254740993/toggle`]);
+      await client.submit(
+        new TestSubmitEvent(renderedForm(initialPage, "/books/-1/toggle")),
+      );
+
+      expect(requests).toEqual([`${origin}/books/-1/toggle`]);
+      expect(renderedBook(client.document.currentMain.markup, "Negative ID")).toStartWith(
+        '<li class="book is-read">',
+      );
+
+      await client.submit(
+        new TestSubmitEvent(
+          renderedForm(client.document.currentMain.markup, "/books/-1/delete"),
+        ),
+      );
+
+      expect(requests).toEqual([
+        `${origin}/books/-1/toggle`,
+        `${origin}/books/-1/delete`,
+      ]);
+      expect(client.document.currentMain.markup).not.toContain("Negative ID");
+
+      await client.submit(
+        new TestSubmitEvent(
+          renderedForm(client.document.currentMain.markup, "/books/9007199254740993/toggle"),
+        ),
+      );
+
+      expect(requests).toEqual([
+        `${origin}/books/-1/toggle`,
+        `${origin}/books/-1/delete`,
+        `${origin}/books/9007199254740993/toggle`,
+      ]);
       expect(renderedBook(client.document.currentMain.markup, "First adjacent ID")).toStartWith(
         '<li class="book">',
       );
@@ -364,6 +397,8 @@ describe("browser shelf mutations", () => {
       );
 
       expect(requests).toEqual([
+        `${origin}/books/-1/toggle`,
+        `${origin}/books/-1/delete`,
         `${origin}/books/9007199254740993/toggle`,
         `${origin}/books/9007199254740993/delete`,
       ]);
