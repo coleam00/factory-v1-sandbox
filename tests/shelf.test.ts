@@ -2,6 +2,26 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { openShelf } from "../src/db";
 import { startServer } from "../src/server";
 
+function decodeNumericCharacterReferences(value: string) {
+  return value.replace(
+    /&#(?:x([\da-f]+)|(\d+));?/gi,
+    (_, hexadecimal: string | undefined, decimal: string | undefined) => {
+      const codePoint = Number.parseInt(
+        hexadecimal ?? decimal!,
+        hexadecimal ? 16 : 10,
+      );
+      if (
+        codePoint === 0 ||
+        codePoint > 0x10ffff ||
+        (codePoint >= 0xd800 && codePoint <= 0xdfff)
+      ) {
+        return "\ufffd";
+      }
+      return String.fromCodePoint(codePoint);
+    },
+  );
+}
+
 describe("database", () => {
   test("adds, lists, toggles, and deletes books", () => {
     const db = openShelf(":memory:");
@@ -36,8 +56,18 @@ describe("HTTP routes", () => {
     ];
     expect(skipLinks).toHaveLength(1);
     const targetId = decodeURIComponent(skipLinks[0]![1]!);
-    const renderedIds = [...body.matchAll(/\sid="([^"]+)"/g)].map(
-      (match) => match[1],
+    const renderedIdAttributes: string[] = [];
+    const parsedBody = new HTMLRewriter()
+      .on("[id]", {
+        element(element) {
+          const id = element.getAttribute("id");
+          if (id !== null) renderedIdAttributes.push(id);
+        },
+      })
+      .transform(new Response(body));
+    await parsedBody.text();
+    const renderedIds = renderedIdAttributes.map(
+      decodeNumericCharacterReferences,
     );
     expect(renderedIds.filter((id) => id === targetId)).toHaveLength(1);
     expect(body).toContain(
