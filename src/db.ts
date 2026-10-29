@@ -46,10 +46,10 @@ export function openShelf(path = process.env.SHELF_DB ?? "shelf.db") {
     add(title: string, author: string) {
       return Number(insert.run(title.trim(), author.trim()).lastInsertRowid);
     },
-    toggle(id: number) {
+    toggle(id: number | string) {
       return toggle.run(id).changes === 1;
     },
-    remove(id: number) {
+    remove(id: number | string) {
       return remove.run(id).changes === 1;
     },
     close() {

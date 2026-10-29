@@ -1,4 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { openShelf } from "../src/db";
 import { startServer } from "../src/server";
 
@@ -57,4 +61,58 @@ describe("HTTP routes", () => {
     expect(await invalid.text()).toContain("Title and author are required");
     expect((await fetch(`${base}/missing`)).status).toBe(404);
   });
+
+  for (const action of ["toggle", "delete"] as const) {
+    test(`${action} preserves exact numeric IDs and reports missing books`, async () => {
+      const directory = mkdtempSync(join(tmpdir(), "shelf-test-"));
+      const dbPath = join(directory, "shelf.db");
+      const isolatedApp = startServer({ port: 0, dbPath });
+      const inspectionDb = new Database(dbPath);
+      const largeId = "9007199254740992";
+      const missingId = "9007199254740993";
+      const insert = inspectionDb.query(
+        "INSERT INTO books (id, title, author) VALUES (?, ?, ?)",
+      );
+      insert.run(1, "Control", "Still Here");
+      insert.run(BigInt(largeId), "Large", "Exact ID");
+      const books = () =>
+        inspectionDb
+          .query<
+            { id: string; title: string; author: string; read: number; created_at: string },
+            []
+          >(
+            "SELECT CAST(id AS TEXT) AS id, title, author, read, created_at FROM books ORDER BY id",
+          )
+          .all();
+
+      try {
+        const before = books();
+        const missing = await fetch(`${isolatedApp.server.url}books/${missingId}/${action}`, {
+          method: "POST",
+          redirect: "manual",
+        });
+        expect(missing.status).toBe(404);
+        expect(books()).toEqual(before);
+
+        const existing = await fetch(`${isolatedApp.server.url}books/${largeId}/${action}`, {
+          method: "POST",
+          redirect: "manual",
+        });
+        expect(existing.status).toBe(303);
+
+        if (action === "toggle") {
+          expect(books()).toEqual([
+            before[0],
+            { ...before[1], read: 1 },
+          ]);
+        } else {
+          expect(books()).toEqual([before[0]]);
+        }
+      } finally {
+        inspectionDb.close();
+        isolatedApp.close();
+        rmSync(directory, { recursive: true, force: true });
+      }
+    });
+  }
 });
