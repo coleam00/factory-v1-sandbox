@@ -1,7 +1,18 @@
 import { Database } from "bun:sqlite";
 
+export type BookId = bigint;
+
+const minimumBookId = -(1n << 63n);
+const maximumBookId = (1n << 63n) - 1n;
+
+export function parseBookId(value: string): BookId | undefined {
+  if (!/^-?\d+$/.test(value)) return undefined;
+  const id = BigInt(value);
+  return id >= minimumBookId && id <= maximumBookId ? id : undefined;
+}
+
 export type Book = {
-  id: number;
+  id: BookId;
   title: string;
   author: string;
   read: boolean;
@@ -11,14 +22,14 @@ export type Book = {
 export type ExportedBook = Pick<Book, "id" | "title" | "author" | "read">;
 
 type BookRow = Omit<Book, "read" | "createdAt"> & {
-  read: number;
+  read: bigint;
   created_at: string;
 };
 
-type ExportedBookRow = Omit<ExportedBook, "read"> & { read: number };
+type ExportedBookRow = Omit<ExportedBook, "read"> & { read: bigint };
 
 export function openShelf(path = process.env.SHELF_DB ?? "shelf.db") {
-  const db = new Database(path, { create: true });
+  const db = new Database(path, { create: true, safeIntegers: true });
   db.exec(`
     PRAGMA journal_mode = WAL;
     CREATE TABLE IF NOT EXISTS books (
@@ -58,13 +69,15 @@ export function openShelf(path = process.env.SHELF_DB ?? "shelf.db") {
         read: Boolean(read),
       }));
     },
-    add(title: string, author: string) {
-      return Number(insert.run(title.trim(), author.trim()).lastInsertRowid);
+    add(title: string, author: string): BookId {
+      const id = insert.run(title.trim(), author.trim()).lastInsertRowid;
+      if (typeof id !== "bigint") throw new TypeError("SQLite did not return an exact book ID");
+      return id;
     },
-    toggle(id: number) {
+    toggle(id: BookId) {
       return toggle.run(id).changes === 1;
     },
-    remove(id: number) {
+    remove(id: BookId) {
       return remove.run(id).changes === 1;
     },
     close() {

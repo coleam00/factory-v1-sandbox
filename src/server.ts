@@ -1,14 +1,25 @@
 import { join } from "node:path";
-import { openShelf } from "./db";
+import { openShelf, parseBookId, type BookId, type ExportedBook } from "./db";
 import { page } from "./views";
 
 const publicDir = join(import.meta.dir, "..", "public");
 const html = (body: string, status = 200) =>
   new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8" } });
 const redirect = () => Response.redirect("/", 303);
+const exportJson = (books: ExportedBook[]) =>
+  `[${books
+    .map(
+      ({ id, title, author, read }) =>
+        `{"id":${id},"title":${JSON.stringify(title)},"author":${JSON.stringify(author)},"read":${read}}`,
+    )
+    .join(",")}]`;
 
 export function startServer(options: { port?: number; dbPath?: string } = {}) {
   const shelf = openShelf(options.dbPath);
+  const mutationHandlers = new Map<string, (id: BookId) => boolean>([
+    ["toggle", (id) => shelf.toggle(id)],
+    ["delete", (id) => shelf.remove(id)],
+  ]);
   const server = Bun.serve({
     port: options.port ?? Number(process.env.PORT ?? 3000),
     async fetch(request) {
@@ -16,7 +27,7 @@ export function startServer(options: { port?: number; dbPath?: string } = {}) {
 
       if (request.method === "GET" && url.pathname === "/") return html(page(shelf.list()));
       if (request.method === "GET" && url.pathname === "/books/export.json") {
-        return new Response(JSON.stringify(shelf.exportBooks()), {
+        return new Response(exportJson(shelf.exportBooks()), {
           headers: {
             "content-type": "application/json; charset=utf-8",
             "content-disposition": 'attachment; filename="shelf.json"',
@@ -35,10 +46,12 @@ export function startServer(options: { port?: number; dbPath?: string } = {}) {
         return redirect();
       }
 
-      const match = url.pathname.match(/^\/books\/(\d+)\/(toggle|delete)$/);
+      const match = url.pathname.match(/^\/books\/(-?\d+)\/([^/]+)$/);
       if (request.method === "POST" && match) {
-        const id = Number(match[1]);
-        match[2] === "toggle" ? shelf.toggle(id) : shelf.remove(id);
+        const handler = mutationHandlers.get(match[2]);
+        if (!handler) return new Response("Not found", { status: 404 });
+        const id = parseBookId(match[1]);
+        if (id !== undefined) handler(id);
         return redirect();
       }
       return new Response("Not found", { status: 404 });
