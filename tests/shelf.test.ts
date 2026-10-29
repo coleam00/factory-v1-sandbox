@@ -20,12 +20,20 @@ describe("page", () => {
         read: true,
         createdAt: "2026-10-29 00:00:00",
       },
+      {
+        id: 3,
+        title: "The Left Hand of Darkness",
+        author: "Ursula K. Le Guin",
+        read: false,
+        createdAt: "2026-10-29 00:00:00",
+      },
     ]);
 
     expect(body).toContain('aria-label="Mark Dune as read"');
     expect(body).toContain(
       'aria-label="Mark A &quot;Book&quot; &amp; &lt;More&gt; as unread"',
     );
+    expect(body).toContain('aria-label="Mark The Left Hand of Darkness as read"');
   });
 });
 
