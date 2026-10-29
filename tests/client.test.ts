@@ -137,6 +137,12 @@ function renderedForm(html: string, action: string) {
   );
 }
 
+function renderedMutationForm(html: string, operation: "toggle" | "delete") {
+  const action = html.match(new RegExp(`action="([^"]+/${operation})"`))?.[1];
+  if (!action) throw new Error(`Rendered page has no ${operation} form`);
+  return renderedForm(html, action);
+}
+
 function book(id: number, title: string, read = false): Book {
   return { id, title, author: "Test Author", read, createdAt: "2026-01-01 00:00:00" };
 }
@@ -187,19 +193,35 @@ function clientHarness(
   return { document, submit: document.handler, reloads: () => reloads };
 }
 
+function serverBackedClient(
+  initialPage: string,
+  app: ReturnType<typeof startServer>,
+  requests: string[],
+) {
+  return clientHarness(initialPage, async (url, options) => {
+    requests.push(url);
+    return fetch(new URL(new URL(url).pathname, app.server.url), {
+      method: options.method,
+      body: new URLSearchParams(options.body.fields),
+    });
+  });
+}
+
+async function addServerBook(app: ReturnType<typeof startServer>) {
+  const response = await fetch(new URL("/books", app.server.url), {
+    method: "POST",
+    body: new URLSearchParams({ title: "Kindred", author: "Octavia E. Butler" }),
+  });
+  return response.text();
+}
+
 describe("browser shelf mutations", () => {
   test("adds the first book in place without navigating", async () => {
     const app = startServer({ port: 0, dbPath: ":memory:" });
     try {
       const initialPage = page([]);
-      const requests: Array<{ url: string; options: { method: string; body: TestFormData } }> = [];
-      const client = clientHarness(initialPage, async (url, options) => {
-        requests.push({ url, options });
-        return fetch(new URL(new URL(url).pathname, app.server.url), {
-          method: options.method,
-          body: new URLSearchParams(options.body.fields),
-        });
-      });
+      const requests: string[] = [];
+      const client = serverBackedClient(initialPage, app, requests);
       const form = renderedForm(initialPage, "/books");
       form.setValue("Title", "Kindred");
       form.setValue("Author", "Octavia E. Butler");
@@ -209,8 +231,7 @@ describe("browser shelf mutations", () => {
 
       expect(event.defaultPrevented).toBe(true);
       expect(client.reloads()).toBe(0);
-      expect(requests).toHaveLength(1);
-      expect(requests[0]?.url).toBe(`${origin}/books`);
+      expect(requests).toEqual([`${origin}/books`]);
       expect(client.document.currentMain.markup).toContain("Kindred");
       expect(client.document.currentMain.markup).toContain("<b>0</b> of 1 read");
       expect(client.document.currentMain.markup).not.toContain("Your shelf is empty");
@@ -284,26 +305,52 @@ describe("browser shelf mutations", () => {
   });
 
   test("deletes the final book in place", async () => {
-    const initialPage = page([book(1, "Kindred")]);
-    const requests: string[] = [];
-    const client = clientHarness(initialPage, async (url) => {
-      requests.push(url);
-      return new Response(page([]));
-    });
-    const event = new TestSubmitEvent(
-      renderedForm(initialPage, "/books/1/delete"),
-      new TestHtmlButtonElement(),
-    );
+    const app = startServer({ port: 0, dbPath: ":memory:" });
+    try {
+      const initialPage = await addServerBook(app);
+      const requests: string[] = [];
+      const client = serverBackedClient(initialPage, app, requests);
+      const event = new TestSubmitEvent(
+        renderedMutationForm(initialPage, "delete"),
+        new TestHtmlButtonElement(),
+      );
 
-    await client.submit(event);
+      await client.submit(event);
 
-    expect(event.defaultPrevented).toBe(true);
-    expect(requests).toEqual([`${origin}/books/1/delete`]);
-    expect(client.reloads()).toBe(0);
-    expect(emptyStateContents(client.document.currentMain.markup)).toBe(
-      "<p>Your shelf is empty. Add your first book above.</p>",
-    );
-    expect(client.document.currentMain.markup).not.toContain('class="count"');
+      expect(event.defaultPrevented).toBe(true);
+      expect(requests).toEqual([`${origin}/books/1/delete`]);
+      expect(client.reloads()).toBe(0);
+      expect(emptyStateContents(client.document.currentMain.markup)).toBe(
+        "<p>Your shelf is empty. Add your first book above.</p>",
+      );
+      expect(client.document.currentMain.markup).not.toContain('class="count"');
+    } finally {
+      app.close();
+    }
+  });
+
+  test("toggles a rendered book in place", async () => {
+    const app = startServer({ port: 0, dbPath: ":memory:" });
+    try {
+      const initialPage = await addServerBook(app);
+      const requests: string[] = [];
+      const client = serverBackedClient(initialPage, app, requests);
+      const event = new TestSubmitEvent(
+        renderedMutationForm(initialPage, "toggle"),
+        new TestHtmlButtonElement(),
+      );
+
+      await client.submit(event);
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(requests).toEqual([`${origin}/books/1/toggle`]);
+      expect(client.reloads()).toBe(0);
+      expect(client.document.currentMain.markup).toContain('class="book is-read"');
+      expect(client.document.currentMain.markup).toContain('<b>1</b> of 1 read');
+      expect(client.document.currentMain.markup).toContain('aria-label="Mark unread"');
+    } finally {
+      app.close();
+    }
   });
 
   test("serializes overlapping mutations before installing their snapshots", async () => {
