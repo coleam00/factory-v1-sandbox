@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
@@ -32,13 +32,38 @@ function chromeExecutable() {
   return executable;
 }
 
-async function devtoolsPort(profile: string) {
-  const portFile = join(profile, "DevToolsActivePort");
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (existsSync(portFile)) return Number(readFileSync(portFile, "utf8").split(/\r?\n/, 1)[0]);
+function captureBrowserOutput(browser: ReturnType<typeof Bun.spawn>) {
+  if (!(browser.stderr instanceof ReadableStream)) throw new Error("Chrome stderr is not readable");
+  const reader = browser.stderr.getReader();
+  const decoder = new TextDecoder();
+  let output = "";
+  const finished = (async () => {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      output += decoder.decode(chunk.value, { stream: true });
+    }
+    output += decoder.decode();
+  })();
+  return { finished, output: () => output };
+}
+
+async function devtoolsPort(
+  browser: ReturnType<typeof Bun.spawn>,
+  diagnostics: ReturnType<typeof captureBrowserOutput>,
+) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const match = diagnostics.output().match(/DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)\//);
+    if (match) return Number(match[1]);
+    if (browser.exitCode !== null) {
+      await diagnostics.finished;
+      throw new Error(
+        `Chrome exited before exposing DevTools (exit code ${browser.exitCode}): ${diagnostics.output()}`,
+      );
+    }
     await Bun.sleep(50);
   }
-  throw new Error("Chrome did not expose a DevTools port");
+  throw new Error(`Chrome did not expose DevTools: ${diagnostics.output()}`);
 }
 
 async function connectCdp(url: string) {
@@ -123,24 +148,32 @@ test(
     let app: ReturnType<typeof startServer> | undefined;
     let profile: string | undefined;
     let browser: ReturnType<typeof Bun.spawn> | undefined;
+    let browserOutput: ReturnType<typeof captureBrowserOutput> | undefined;
     let cdp: CdpClient | undefined;
 
     try {
       app = startServer({ port: 0, dbPath: ":memory:" });
       profile = mkdtempSync(join(tmpdir(), "shelf-browser-"));
-      browser = Bun.spawn([
-        chromeExecutable(),
-        "--headless=new",
-        "--no-sandbox",
-        "--disable-gpu",
-        "--remote-debugging-port=0",
-        `--user-data-dir=${profile}`,
-        "about:blank",
-      ]);
+      browser = Bun.spawn(
+        [
+          chromeExecutable(),
+          "--headless=new",
+          "--no-sandbox",
+          "--disable-dev-shm-usage",
+          "--disable-gpu",
+          "--no-first-run",
+          "--remote-debugging-port=0",
+          "--remote-debugging-address=127.0.0.1",
+          `--user-data-dir=${profile}`,
+          "about:blank",
+        ],
+        { stdout: "ignore", stderr: "pipe" },
+      );
+      browserOutput = captureBrowserOutput(browser);
 
       const title = "T".repeat(200);
       const author = "A".repeat(200);
-      const port = await devtoolsPort(profile);
+      const port = await devtoolsPort(browser, browserOutput);
       const target = (await (
         await fetch(`http://127.0.0.1:${port}/json/new?about%3Ablank`, { method: "PUT" })
       ).json()) as { webSocketDebuggerUrl: string };
@@ -308,6 +341,7 @@ test(
         if (browser) {
           browser.kill();
           await browser.exited;
+          await browserOutput?.finished;
         }
       } finally {
         try {
@@ -318,5 +352,5 @@ test(
       }
     }
   },
-  15_000,
+  20_000,
 );
