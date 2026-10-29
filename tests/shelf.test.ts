@@ -62,6 +62,36 @@ describe("HTTP routes", () => {
     expect(await invalid.text()).toContain("Title and author are required");
     expect((await fetch(`${base}/missing`)).status).toBe(404);
   });
+
+  test("returns 404 without changing the shelf when a book is missing", async () => {
+    const app = startServer({ port: 0, dbPath: ":memory:" });
+    const base = app.server.url.origin;
+    const activeView = "filter=all&order=title";
+
+    try {
+      await fetch(`${base}/books`, {
+        method: "POST",
+        body: new URLSearchParams({ title: "Kindred", author: "Octavia E. Butler" }),
+      });
+      const shelfBefore = await (await fetch(`${base}/?${activeView}`)).text();
+
+      for (const action of ["toggle", "delete"] as const) {
+        const response = await fetch(`${base}/books/999/${action}?${activeView}`, {
+          method: "POST",
+          redirect: "manual",
+        });
+
+        expect(response.status).toBe(404);
+        const body = await response.text();
+        expect(body).toContain("Book not found.");
+        expect(body).toContain('<option value="all" selected>');
+        expect(body).toContain('<option value="title" selected>');
+        expect(await (await fetch(`${base}/?${activeView}`)).text()).toBe(shelfBefore);
+      }
+    } finally {
+      app.close();
+    }
+  });
 });
 
 describe("shelf view", () => {
