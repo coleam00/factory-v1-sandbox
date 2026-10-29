@@ -2,6 +2,20 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { openShelf } from "../src/db";
 import { startServer } from "../src/server";
 
+const originalRevision = process.env.APP_REVISION;
+
+function startWithRevision(revision?: string) {
+  if (revision === undefined) delete process.env.APP_REVISION;
+  else process.env.APP_REVISION = revision;
+
+  try {
+    return startServer({ port: 0, dbPath: ":memory:" });
+  } finally {
+    if (originalRevision === undefined) delete process.env.APP_REVISION;
+    else process.env.APP_REVISION = originalRevision;
+  }
+}
+
 describe("database", () => {
   test("adds, lists, toggles, and deletes books", () => {
     const db = openShelf(":memory:");
@@ -20,7 +34,7 @@ describe("HTTP routes", () => {
   let base: string;
 
   beforeAll(() => {
-    app = startServer({ port: 0, dbPath: ":memory:" });
+    app = startWithRevision();
     base = app.server.url.origin;
   });
   afterAll(() => app.close());
@@ -56,5 +70,49 @@ describe("HTTP routes", () => {
     expect(invalid.status).toBe(400);
     expect(await invalid.text()).toContain("Title and author are required");
     expect((await fetch(`${base}/missing`)).status).toBe(404);
+  });
+});
+
+describe("health", () => {
+  test("reports an absent revision without changing the empty shelf", async () => {
+    const app = startWithRevision();
+
+    try {
+      const before = await (await fetch(app.server.url)).text();
+      const response = await fetch(new URL("/health", app.server.url));
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toStartWith("application/json");
+      expect(await response.json()).toEqual({ status: "ok", revision: null });
+      expect(await (await fetch(app.server.url)).text()).toBe(before);
+    } finally {
+      app.close();
+    }
+  });
+
+  test("normalizes a configured full revision", async () => {
+    const app = startWithRevision("ABCDEF0123456789ABCDEF0123456789ABCDEF01");
+
+    try {
+      const response = await fetch(new URL("/health", app.server.url));
+      expect(await response.json()).toEqual({
+        status: "ok",
+        revision: "abcdef0123456789abcdef0123456789abcdef01",
+      });
+    } finally {
+      app.close();
+    }
+  });
+
+  test("rejects a malformed revision without becoming unhealthy", async () => {
+    const app = startWithRevision("not-a-full-commit");
+
+    try {
+      const response = await fetch(new URL("/health", app.server.url));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ status: "ok", revision: null });
+    } finally {
+      app.close();
+    }
   });
 });
