@@ -5,7 +5,7 @@ main { width: min(760px, calc(100% - 32px)); margin: 56px auto; }
 header { display: flex; align-items: end; justify-content: space-between; margin-bottom: 28px; }
 h1, h2, p { margin: 0; }
 h1 { font-family: Georgia, serif; font-size: 48px; letter-spacing: -.04em; }
-header p, .book span, .empty span { color: #71756d; }
+header p, .book span { color: #71756d; }
 .count { padding: 10px 14px; border: 1px solid #d5d1c5; border-radius: 999px; background: #fffdf8; }
 .add { display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: end; padding: 20px; background: #233c2c; border-radius: 14px; box-shadow: 0 10px 30px #20362620; }
 label { color: #e6eee6; font-size: 13px; font-weight: 650; }
@@ -23,7 +23,7 @@ ul { list-style: none; padding: 0; margin: 0; border-top: 1px solid #d5d1c5; }
 .is-read strong { color: #81847e; text-decoration: line-through; }
 .delete { padding: 7px; background: transparent; color: #8b4f47; font-size: 13px; }
 .empty { padding: 48px; text-align: center; border: 1px dashed #bbb7ab; border-radius: 12px; }
-.empty p { margin-bottom: 5px; font-weight: 700; }
+.empty p { font-weight: 700; }
 .error { margin-top: 12px; color: #9a392e; }
 button:focus-visible, input:focus-visible { outline: 3px solid #d39c2f; outline-offset: 2px; }
 @media (max-width: 620px) { main { margin-top: 28px; } .add { grid-template-columns: 1fr; } header { align-items: start; } h1 { font-size: 40px; } }
