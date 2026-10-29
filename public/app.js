@@ -6,11 +6,12 @@ const mutationErrorMessage =
   "Shelf could not confirm that change. Check your shelf before trying again.";
 
 function showMutationError(message) {
-  let error = document.querySelector('main [role="alert"]');
+  let error = document.querySelector("main [data-mutation-error]");
   if (!error) {
     error = document.createElement("p");
     error.className = "error";
     error.setAttribute("role", "alert");
+    error.setAttribute("data-mutation-error", "");
     document.querySelector("main")?.prepend(error);
   }
   error.textContent = message;

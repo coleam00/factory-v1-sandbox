@@ -71,11 +71,17 @@ class TestDocument {
   handler?: (event: TestSubmitEvent) => Promise<void>;
   readonly replacements: string[] = [];
   currentMain: TestMain;
-  alert?: TestAlert;
 
   constructor(html: string) {
     this.currentMain = new TestMain(this, mainMarkup(html));
-    this.alert = this.currentMain.alert;
+  }
+
+  get alert() {
+    return this.currentMain.alerts[0];
+  }
+
+  get alerts() {
+    return this.currentMain.alerts;
   }
 
   addEventListener(type: string, handler: (event: TestSubmitEvent) => Promise<void>) {
@@ -85,6 +91,9 @@ class TestDocument {
   querySelector(selector: string) {
     if (selector === "main") return this.currentMain;
     if (selector === 'main [role="alert"]') return this.alert ?? null;
+    if (selector === "main [data-mutation-error]") {
+      return this.alerts.find((alert) => alert.attributes.has("data-mutation-error")) ?? null;
+    }
     if (selector === "form.add") return this.currentMain.addForm;
     return null;
   }
@@ -106,7 +115,7 @@ class TestDocument {
 }
 
 class TestMain {
-  readonly alert?: TestAlert;
+  readonly alerts: TestAlert[] = [];
   readonly addForm: TestHtmlFormElement;
 
   constructor(
@@ -116,21 +125,21 @@ class TestMain {
     this.addForm = renderedForm(markup, "/books");
     const alertText = markup.match(/<p class="error" role="alert">([^<]*)<\/p>/)?.[1];
     if (alertText) {
-      this.alert = new TestAlert();
-      this.alert.className = "error";
-      this.alert.setAttribute("role", "alert");
-      this.alert.textContent = alertText;
+      const alert = new TestAlert();
+      alert.className = "error";
+      alert.setAttribute("role", "alert");
+      alert.textContent = alertText;
+      this.alerts.push(alert);
     }
   }
 
   replaceWith(next: TestMain) {
     this.document.replacements.push(next.markup);
     this.document.currentMain = next;
-    this.document.alert = next.alert;
   }
 
   prepend(element: TestAlert) {
-    this.document.alert = element;
+    this.alerts.unshift(element);
   }
 }
 
@@ -478,7 +487,78 @@ describe("browser shelf mutations", () => {
     expect(client.reloads()).toBe(0);
   });
 
-  test("updates the server-rendered alert as the client mutation error", async () => {
+  test("preserves a queued validation alert alongside an earlier unconfirmed mutation", async () => {
+    const app = startServer({ port: 0, dbPath: ":memory:" });
+    try {
+      const existing = book(1, "Kindred");
+      const initialPage = page([existing]);
+      const client = clientHarness(initialPage, (url, options) => {
+        if (url.endsWith("/toggle")) return Promise.reject(new Error("network unavailable"));
+        return fetch(new URL(new URL(url).pathname, app.server.url), {
+          method: options.method,
+          body: new URLSearchParams(options.body.fields),
+        });
+      });
+      const invalidAdd = renderedForm(initialPage, "/books");
+      invalidAdd.setValue("Title", "   ");
+      invalidAdd.setValue("Author", "Octavia E. Butler");
+
+      const failedToggle = client.submit(
+        new TestSubmitEvent(
+          renderedForm(initialPage, "/books/1/toggle"),
+          new TestHtmlButtonElement(),
+        ),
+      );
+      const rejectedAdd = client.submit(
+        new TestSubmitEvent(invalidAdd, new TestHtmlButtonElement()),
+      );
+      await failedToggle;
+      await rejectedAdd;
+
+      expect(client.document.alerts.map(({ textContent }) => textContent)).toEqual([
+        "Shelf could not confirm that change. Check your shelf before trying again.",
+        "Title and author are required.",
+      ]);
+    } finally {
+      app.close();
+    }
+  });
+
+  test("clears visible recovery state when the reader retries", async () => {
+    const recovered = book(1, "Kindred");
+    let requests = 0;
+    const initialPage = page([]);
+    const client = clientHarness(initialPage, async () => {
+      requests++;
+      if (requests === 1) throw new Error("network unavailable");
+      return new Response(page([recovered]));
+    });
+    const failedAdd = client.document.currentMain.addForm;
+    failedAdd.setValue("Title", "Kindred");
+    failedAdd.setValue("Author", "Octavia E. Butler");
+
+    await client.submit(
+      new TestSubmitEvent(failedAdd, new TestHtmlButtonElement()),
+    );
+    expect(client.document.alert?.textContent).toBe(
+      "Shelf could not confirm that change. Check your shelf before trying again.",
+    );
+
+    await client.submit(
+      new TestSubmitEvent(client.document.currentMain.addForm, new TestHtmlButtonElement()),
+    );
+
+    expect(client.document.currentMain.markup).toContain("Kindred");
+    expect(client.document.alert).toBeUndefined();
+    expect(
+      client.document.currentMain.addForm.controls.map(({ label, value }) => [label, value]),
+    ).toEqual([
+      ["Title", ""],
+      ["Author", ""],
+    ]);
+  });
+
+  test("keeps server and client mutation alerts styled and accessible", async () => {
     const initialPage = page([], "Title and author are required.");
     const client = clientHarness(initialPage, async () => {
       throw new Error("network unavailable");
@@ -489,10 +569,14 @@ describe("browser shelf mutations", () => {
       new TestSubmitEvent(renderedForm(initialPage, "/books"), new TestHtmlButtonElement()),
     );
 
-    expect(client.document.alert).toBe(serverAlert);
+    expect(client.document.alert).not.toBe(serverAlert);
+    expect(client.document.alerts).toHaveLength(2);
+    expect(serverAlert?.textContent).toBe("Title and author are required.");
+    expect(client.document.alert?.className).toBe("error");
+    expect(client.document.alert?.attributes.get("role")).toBe("alert");
     expect(serverAlert?.className).toBe("error");
     expect(serverAlert?.attributes.get("role")).toBe("alert");
-    expect(serverAlert?.textContent).toBe(
+    expect(client.document.alert?.textContent).toBe(
       "Shelf could not confirm that change. Check your shelf before trying again.",
     );
   });
