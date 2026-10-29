@@ -136,6 +136,18 @@ describe("health", () => {
     }
   });
 
+  test("rejects whitespace around a full revision", async () => {
+    const app = startWithRevision(" 0123456789abcdef0123456789abcdef01234567");
+
+    try {
+      const response = await fetch(new URL("/health", app.server.url));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ status: "ok", revision: null });
+    } finally {
+      app.close();
+    }
+  });
+
   test("preserves a configured lowercase full revision", async () => {
     const revision = "0123456789abcdef0123456789abcdef01234567";
     const app = startWithRevision(revision);
