@@ -4,13 +4,14 @@ config:
   protected_paths: [".archon/**"]
   human_in_the_loop: standard
   app: { start: "bun src/server.ts", port_env: PORT, db_env: SHELF_DB, health_path: "/" }
-select: { found: true, pr: 9, head: doc123, files: ["README.md"], base: main, issue: 13, issue_body: "", issue_labels: [archon-size-s] }
+select: { found: true, pr: 9, head: doc123, files: ["README.md"], base: main, base_oid: base123, issue: 13, issue_body: "", issue_labels: [archon-size-s] }
 pending: { posted: true }
 scope: { run: false, depth: light, reason: "skipped: no front-end change" }
 policy: { ok: true, protected_files: [], description: policy clear }
+finalize: { recovered: false }
 cleanup: { cleaned: false, pid_file: false }
 fixture:
-  inputs: { repo_path: example/shelf, pr: "9" }
+  inputs: { repo_path: example/shelf, pr: "9", protected_grant: "" }
   expect: completed
-  reached: [config, select, pending, scope, policy, cleanup]
+  reached: [config, select, pending, scope, policy, finalize, cleanup]
 exec-code: true

@@ -4,23 +4,25 @@ config: &config
   protected_paths: [".archon/**"]
   human_in_the_loop: standard
   app: { start: "bun src/server.ts", port_env: PORT, db_env: SHELF_DB, health_path: "/" }
-select: { found: true, pr: 7, head: abc123, files: ["public/app.css"], base: main, issue: 11, issue_body: "## Acceptance\n- [ ] works", issue_labels: [archon-size-m] }
+select: { found: true, pr: 7, head: abc123, files: ["public/app.css"], base: main, base_oid: base123, issue: 11, issue_body: "## Acceptance\n- [ ] works", issue_labels: [archon-size-m] }
 pending: { posted: true }
 scope: { run: true, depth: normal, reason: selected }
 policy: { ok: true, protected_files: [], description: policy clear }
+holdouts: { ids: [H-01] }
 prepare: { temp: "/tmp/factory-pass", merged: def456, prepared_at: 1000 }
 check:
   overall: PASS
-  lines: ["C1  PASS  The add flow works.  evidence: add.png"]
+  lines: ["C1  PASS  The add flow works.  evidence: add.png", "H-01  PASS  The private invariant holds.  evidence: holdout.png"]
   summary: Checked the add flow.
 evidence:
   overall: PASS
-  lines: ["C1  PASS  The add flow works.  evidence: add.png"]
-  report: "# App check\nC1  PASS  The add flow works.  evidence: add.png"
+  lines: ["C1  PASS  The add flow works.  evidence: add.png", "H-01  PASS  The private invariant holds.  evidence: holdout.png"]
+  report: "# App check\nC1  PASS  The add flow works.  evidence: add.png\nH-01  PASS  The private invariant holds.  evidence: holdout.png"
 publish: { state: success, comment: created }
+finalize: { recovered: false }
 cleanup: { cleaned: true, pid_file: true }
 fixture:
-  inputs: { repo_path: example/shelf, pr: "7" }
+  inputs: { repo_path: example/shelf, pr: "7", protected_grant: "" }
   expect: completed
-  reached: [config, select, pending, scope, policy, prepare, check, evidence, publish, cleanup]
+  reached: [config, select, pending, scope, policy, holdouts, prepare, check, evidence, publish, finalize, cleanup]
 exec-code: true

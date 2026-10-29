@@ -1,4 +1,7 @@
 import type { FactoryConfig } from "../../../../scripts/factory-config.ts";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { boundDescription } from "./binding.ts";
 import { emit, env, jsonEnv, matchingFiles, postStatus } from "../../.shared/utils.ts";
 
 export function scopeDecision(config: FactoryConfig, files: string[], labels: string[]) {
@@ -13,6 +16,11 @@ export function scopeDecision(config: FactoryConfig, files: string[], labels: st
 
 if (import.meta.main) {
   const decision = scopeDecision(jsonEnv<FactoryConfig>("config", {} as FactoryConfig), jsonEnv("files", []), jsonEnv("labels", []));
-  if (!decision.run) postStatus(env("repo_path"), env("head"), "success", "factory/app-check", decision.reason);
+  if (!decision.run) {
+    postStatus(env("repo_path"), env("head"), "success", "factory/app-check", boundDescription(env("base"), env("base_oid"), decision.reason));
+    const root = join(process.env.ARTIFACTS_DIR!, "app-check");
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, "terminal.json"), JSON.stringify({ state: "success", reason: decision.reason }));
+  }
   emit(decision);
 }
