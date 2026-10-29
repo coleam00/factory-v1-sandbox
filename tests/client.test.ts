@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Book } from "../src/db";
+import { startServer } from "../src/server";
 import { page } from "../src/views";
 
 const appSource = await Bun.file(new URL("../public/app.js", import.meta.url)).text();
@@ -10,12 +11,18 @@ class TestHtmlFormElement {
     readonly method: string,
     readonly action: string,
     readonly classes: Set<string>,
-    readonly fields: Record<string, string>,
+    readonly controls: Array<{ label: string; name: string; value: string }>,
   ) {}
 
   readonly classList = {
     contains: (name: string) => this.classes.has(name),
   };
+
+  setValue(label: string, value: string) {
+    const control = this.controls.find((candidate) => candidate.label === label);
+    if (!control) throw new Error(`Rendered form has no ${label} control`);
+    control.value = value;
+  }
 }
 
 class TestHtmlButtonElement {
@@ -23,7 +30,21 @@ class TestHtmlButtonElement {
 }
 
 class TestFormData {
-  constructor(readonly form: TestHtmlFormElement) {}
+  readonly fields: Record<string, string>;
+
+  constructor(form: TestHtmlFormElement) {
+    this.fields = Object.fromEntries(form.controls.map(({ name, value }) => [name, value]));
+  }
+}
+
+class TestAlert {
+  className = "";
+  textContent = "";
+  readonly attributes = new Map<string, string>();
+
+  setAttribute(name: string, value: string) {
+    this.attributes.set(name, value);
+  }
 }
 
 class TestSubmitEvent {
@@ -43,9 +64,11 @@ class TestDocument {
   handler?: (event: TestSubmitEvent) => Promise<void>;
   readonly replacements: string[] = [];
   currentMain: TestMain;
+  alert?: TestAlert;
 
   constructor(html: string) {
     this.currentMain = new TestMain(this, mainMarkup(html));
+    this.alert = this.currentMain.alert;
   }
 
   addEventListener(type: string, handler: (event: TestSubmitEvent) => Promise<void>) {
@@ -53,7 +76,14 @@ class TestDocument {
   }
 
   querySelector(selector: string) {
-    return selector === "main" ? this.currentMain : null;
+    if (selector === "main") return this.currentMain;
+    if (selector === 'main [role="alert"]') return this.alert ?? null;
+    return null;
+  }
+
+  createElement(tag: string) {
+    if (tag !== "p") throw new Error(`Unexpected element: ${tag}`);
+    return new TestAlert();
   }
 
   page(html: string) {
@@ -65,14 +95,29 @@ class TestDocument {
 }
 
 class TestMain {
+  readonly alert?: TestAlert;
+
   constructor(
     private readonly document: TestDocument,
     readonly markup: string,
-  ) {}
+  ) {
+    const alertText = markup.match(/<p class="error" role="alert">([^<]*)<\/p>/)?.[1];
+    if (alertText) {
+      this.alert = new TestAlert();
+      this.alert.className = "error";
+      this.alert.setAttribute("role", "alert");
+      this.alert.textContent = alertText;
+    }
+  }
 
   replaceWith(next: TestMain) {
     this.document.replacements.push(next.markup);
     this.document.currentMain = next;
+    this.document.alert = next.alert;
+  }
+
+  prepend(element: TestAlert) {
+    this.document.alert = element;
   }
 }
 
@@ -87,19 +132,28 @@ function attribute(openingTag: string, name: string) {
   return openingTag.match(new RegExp(`${name}="([^"]*)"`))?.[1];
 }
 
-function renderedForm(html: string, action: string, fields: Record<string, string> = {}) {
+function renderedForm(html: string, action: string) {
   const actionIndex = html.indexOf(`action="${action}"`);
   if (actionIndex < 0) throw new Error(`Rendered page has no form for ${action}`);
   const start = html.lastIndexOf("<form", actionIndex);
-  const end = html.indexOf(">", actionIndex);
-  const openingTag = html.slice(start, end + 1);
+  const openingEnd = html.indexOf(">", actionIndex);
+  const end = html.indexOf("</form>", openingEnd);
+  const openingTag = html.slice(start, openingEnd + 1);
+  const formMarkup = html.slice(start, end + "</form>".length);
   const classes = new Set((attribute(openingTag, "class") ?? "").split(/\s+/).filter(Boolean));
+  const controls = [...formMarkup.matchAll(/<input\b[^>]*>/g)].flatMap((match) => {
+    const name = attribute(match[0], "name");
+    if (!name) return [];
+    const labelStart = formMarkup.lastIndexOf("<label>", match.index);
+    const label = labelStart < 0 ? "" : formMarkup.slice(labelStart + "<label>".length, match.index);
+    return [{ label, name, value: attribute(match[0], "value") ?? "" }];
+  });
 
   return new TestHtmlFormElement(
     attribute(openingTag, "method") ?? "get",
     new URL(action, origin).href,
     classes,
-    fields,
+    controls,
   );
 }
 
@@ -155,32 +209,71 @@ function clientHarness(
 
 describe("browser shelf mutations", () => {
   test("adds the first book in place without navigating", async () => {
-    const initialPage = page([]);
-    const added = book(1, "Kindred");
-    const requests: Array<{ url: string; options: { method: string; body: TestFormData } }> = [];
-    const client = clientHarness(initialPage, async (url, options) => {
-      requests.push({ url, options });
-      return new Response(page([added]));
-    });
-    const form = renderedForm(initialPage, "/books", {
-      title: added.title,
-      author: added.author,
-    });
-    const event = new TestSubmitEvent(form, new TestHtmlButtonElement());
+    const app = startServer({ port: 0, dbPath: ":memory:" });
+    try {
+      const initialPage = page([]);
+      const requests: Array<{ url: string; options: { method: string; body: TestFormData } }> = [];
+      const client = clientHarness(initialPage, async (url, options) => {
+        requests.push({ url, options });
+        return fetch(new URL(new URL(url).pathname, app.server.url), {
+          method: options.method,
+          body: new URLSearchParams(options.body.fields),
+        });
+      });
+      const form = renderedForm(initialPage, "/books");
+      form.setValue("Title", "Kindred");
+      form.setValue("Author", "Octavia E. Butler");
+      const event = new TestSubmitEvent(form, new TestHtmlButtonElement());
 
-    await client.submit(event);
+      await client.submit(event);
 
-    expect(event.defaultPrevented).toBe(true);
-    expect(client.reloads()).toBe(0);
-    expect(requests).toHaveLength(1);
-    expect(requests[0]?.url).toBe(`${origin}/books`);
-    expect(requests[0]?.options.body.form.fields).toEqual({
-      title: "Kindred",
-      author: "Test Author",
+      expect(event.defaultPrevented).toBe(true);
+      expect(client.reloads()).toBe(0);
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.url).toBe(`${origin}/books`);
+      expect(client.document.currentMain.markup).toContain("Kindred");
+      expect(client.document.currentMain.markup).toContain("<b>0</b> of 1 read");
+      expect(client.document.currentMain.markup).not.toContain("Your shelf is empty");
+    } finally {
+      app.close();
+    }
+  });
+
+  test("freezes an add payload when it joins the mutation queue", async () => {
+    const existing = book(1, "Kindred");
+    const initialPage = page([existing]);
+    const firstResponse = deferred<Response>();
+    const requests: Array<{ url: string; body: Record<string, string> }> = [];
+    const client = clientHarness(initialPage, (url, options) => {
+      requests.push({ url, body: options.body.fields });
+      return url.endsWith("/toggle")
+        ? firstResponse.promise
+        : Promise.resolve(new Response(page([book(2, "Submitted title"), existing])));
     });
-    expect(client.document.currentMain.markup).toContain("Kindred");
-    expect(client.document.currentMain.markup).toContain("<b>0</b> of 1 read");
-    expect(client.document.currentMain.markup).not.toContain("Your shelf is empty");
+    const toggle = new TestSubmitEvent(
+      renderedForm(initialPage, "/books/1/toggle"),
+      new TestHtmlButtonElement(),
+    );
+    const addForm = renderedForm(initialPage, "/books");
+    addForm.setValue("Title", "Submitted title");
+    addForm.setValue("Author", "Submitted author");
+    const add = new TestSubmitEvent(addForm, new TestHtmlButtonElement());
+
+    const firstSubmission = client.submit(toggle);
+    const addSubmission = client.submit(add);
+    addForm.setValue("Title", "Edited after submit");
+    addForm.setValue("Author", "Edited author");
+    firstResponse.resolve(new Response(page([existing])));
+    await firstSubmission;
+    await addSubmission;
+
+    expect(requests).toEqual([
+      { url: `${origin}/books/1/toggle`, body: {} },
+      {
+        url: `${origin}/books`,
+        body: { title: "Submitted title", author: "Submitted author" },
+      },
+    ]);
   });
 
   test("confirms a rendered delete before submitting it", async () => {
@@ -248,6 +341,32 @@ describe("browser shelf mutations", () => {
     expect(client.document.replacements[0]).toContain("<b>1</b> of 2 read");
     expect(client.document.currentMain.markup).toContain("<b>1</b> of 1 read");
     expect(client.document.currentMain.markup).not.toContain("Dune");
+    expect(client.reloads()).toBe(0);
+  });
+
+  test("keeps the form and shows an actionable error when a mutation cannot be confirmed", async () => {
+    const initialPage = page([]);
+    const client = clientHarness(initialPage, async () => {
+      throw new Error("network unavailable");
+    });
+    const form = renderedForm(initialPage, "/books");
+    form.setValue("Title", "Kindred");
+    form.setValue("Author", "Octavia E. Butler");
+    const submitter = new TestHtmlButtonElement();
+
+    await client.submit(new TestSubmitEvent(form, submitter));
+
+    expect(submitter.disabled).toBe(false);
+    expect(form.controls.map(({ label, value }) => [label, value])).toEqual([
+      ["Title", "Kindred"],
+      ["Author", "Octavia E. Butler"],
+    ]);
+    expect(client.document.currentMain.markup).toBe(mainMarkup(initialPage));
+    expect(client.document.alert?.className).toBe("error");
+    expect(client.document.alert?.attributes.get("role")).toBe("alert");
+    expect(client.document.alert?.textContent).toBe(
+      "Shelf could not confirm that change. Check your shelf before trying again.",
+    );
     expect(client.reloads()).toBe(0);
   });
 });
