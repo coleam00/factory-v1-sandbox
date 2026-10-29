@@ -1,11 +1,18 @@
 import { join } from "node:path";
-import { openShelf } from "./db";
+import { openShelf, type ExportedBook } from "./db";
 import { page } from "./views";
 
 const publicDir = join(import.meta.dir, "..", "public");
 const html = (body: string, status = 200) =>
   new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8" } });
 const redirect = () => Response.redirect("/", 303);
+const exportJson = (books: ExportedBook[]) =>
+  `[${books
+    .map(
+      ({ id, title, author, read }) =>
+        `{"id":${id},"title":${JSON.stringify(title)},"author":${JSON.stringify(author)},"read":${read}}`,
+    )
+    .join(",")}]`;
 
 export function startServer(options: { port?: number; dbPath?: string } = {}) {
   const shelf = openShelf(options.dbPath);
@@ -16,8 +23,11 @@ export function startServer(options: { port?: number; dbPath?: string } = {}) {
 
       if (request.method === "GET" && url.pathname === "/") return html(page(shelf.list()));
       if (request.method === "GET" && url.pathname === "/books/export.json") {
-        return Response.json(shelf.exportBooks(), {
-          headers: { "content-disposition": 'attachment; filename="shelf.json"' },
+        return new Response(exportJson(shelf.exportBooks()), {
+          headers: {
+            "content-type": "application/json; charset=utf-8",
+            "content-disposition": 'attachment; filename="shelf.json"',
+          },
         });
       }
       if (request.method === "GET" && (url.pathname === "/app.js" || url.pathname === "/style.css")) {
@@ -34,7 +44,7 @@ export function startServer(options: { port?: number; dbPath?: string } = {}) {
 
       const match = url.pathname.match(/^\/books\/(\d+)\/(toggle|delete)$/);
       if (request.method === "POST" && match) {
-        const id = Number(match[1]);
+        const id = BigInt(match[1]);
         match[2] === "toggle" ? shelf.toggle(id) : shelf.remove(id);
         return redirect();
       }
