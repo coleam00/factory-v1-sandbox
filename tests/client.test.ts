@@ -240,11 +240,21 @@ describe("browser shelf mutations", () => {
     const toggleResponse = deferred<Response>();
     const addResponse = deferred<Response>();
     const deleteResponse = deferred<Response>();
+    const toggleDispatched = deferred<void>();
+    const addDispatched = deferred<void>();
+    const deleteDispatched = deferred<void>();
     const requests: Array<{ url: string; body: Record<string, string> }> = [];
     const client = clientHarness(initialPage, (url, options) => {
       requests.push({ url, body: options.body.fields });
-      if (url.endsWith("/toggle")) return toggleResponse.promise;
-      if (url.endsWith("/delete")) return deleteResponse.promise;
+      if (url.endsWith("/toggle")) {
+        toggleDispatched.resolve();
+        return toggleResponse.promise;
+      }
+      if (url.endsWith("/delete")) {
+        deleteDispatched.resolve();
+        return deleteResponse.promise;
+      }
+      addDispatched.resolve();
       return addResponse.promise;
     });
     const toggle = new TestSubmitEvent(renderedForm(initialPage, "/books/1/toggle"));
@@ -259,11 +269,22 @@ describe("browser shelf mutations", () => {
     const deleteSubmission = client.submit(remove);
     addForm.setValue("Title", "Edited after submit");
     addForm.setValue("Author", "Edited author");
-    deleteResponse.resolve(new Response(page([added])));
-    addResponse.resolve(new Response(page([added, { ...existing, read: true }])));
-    toggleResponse.resolve(new Response(page([{ ...existing, read: true }])));
-    await Promise.all([toggleSubmission, addSubmission, deleteSubmission]);
 
+    await toggleDispatched.promise;
+    expect(requests).toEqual([{ url: `${origin}/books/1/toggle`, body: {} }]);
+    toggleResponse.resolve(new Response(page([{ ...existing, read: true }])));
+
+    await addDispatched.promise;
+    expect(requests).toEqual([
+      { url: `${origin}/books/1/toggle`, body: {} },
+      {
+        url: `${origin}/books`,
+        body: { title: "Submitted title", author: "Submitted author" },
+      },
+    ]);
+    addResponse.resolve(new Response(page([added, { ...existing, read: true }])));
+
+    await deleteDispatched.promise;
     expect(requests).toEqual([
       { url: `${origin}/books/1/toggle`, body: {} },
       {
@@ -272,6 +293,9 @@ describe("browser shelf mutations", () => {
       },
       { url: `${origin}/books/1/delete`, body: {} },
     ]);
+    deleteResponse.resolve(new Response(page([added])));
+    await Promise.all([toggleSubmission, addSubmission, deleteSubmission]);
+
     expect(client.document.currentMain.markup).toContain("Submitted title");
     expect(client.document.currentMain.markup).toContain("<b>0</b> of 1 read");
     expect(client.document.currentMain.markup).not.toContain("Kindred");
