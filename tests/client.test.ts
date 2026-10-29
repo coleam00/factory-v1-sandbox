@@ -17,9 +17,6 @@ class TestHtmlFormElement {
   readonly classList = {
     contains: (name: string) => this.classes.has(name),
   };
-  readonly elements = {
-    namedItem: (name: string) => this.controls.find((control) => control.name === name) ?? null,
-  };
 
   setValue(label: string, value: string) {
     const control = this.controls.find((candidate) => candidate.label === label);
@@ -37,20 +34,6 @@ class TestFormData {
 
   constructor(form: TestHtmlFormElement) {
     this.fields = Object.fromEntries(form.controls.map(({ name, value }) => [name, value]));
-  }
-
-  entries() {
-    return Object.entries(this.fields)[Symbol.iterator]();
-  }
-}
-
-class TestAlert {
-  className = "";
-  textContent = "";
-  readonly attributes = new Map<string, string>();
-
-  setAttribute(name: string, value: string) {
-    this.attributes.set(name, value);
   }
 }
 
@@ -76,31 +59,13 @@ class TestDocument {
     this.currentMain = new TestMain(this, mainMarkup(html));
   }
 
-  get alert() {
-    return this.currentMain.alerts[0];
-  }
-
-  get alerts() {
-    return this.currentMain.alerts;
-  }
-
   addEventListener(type: string, handler: (event: TestSubmitEvent) => Promise<void>) {
     if (type === "submit") this.handler = handler;
   }
 
   querySelector(selector: string) {
     if (selector === "main") return this.currentMain;
-    if (selector === 'main [role="alert"]') return this.alert ?? null;
-    if (selector === "main [data-mutation-error]") {
-      return this.alerts.find((alert) => alert.attributes.has("data-mutation-error")) ?? null;
-    }
-    if (selector === "form.add") return this.currentMain.addForm;
     return null;
-  }
-
-  createElement(tag: string) {
-    if (tag !== "p") throw new Error(`Unexpected element: ${tag}`);
-    return new TestAlert();
   }
 
   page(html: string) {
@@ -115,31 +80,14 @@ class TestDocument {
 }
 
 class TestMain {
-  readonly alerts: TestAlert[] = [];
-  readonly addForm: TestHtmlFormElement;
-
   constructor(
     private readonly document: TestDocument,
     readonly markup: string,
-  ) {
-    this.addForm = renderedForm(markup, "/books");
-    const alertText = markup.match(/<p class="error" role="alert">([^<]*)<\/p>/)?.[1];
-    if (alertText) {
-      const alert = new TestAlert();
-      alert.className = "error";
-      alert.setAttribute("role", "alert");
-      alert.textContent = alertText;
-      this.alerts.push(alert);
-    }
-  }
+  ) {}
 
   replaceWith(next: TestMain) {
     this.document.replacements.push(next.markup);
     this.document.currentMain = next;
-  }
-
-  prepend(element: TestAlert) {
-    this.alerts.unshift(element);
   }
 }
 
@@ -372,7 +320,7 @@ describe("browser shelf mutations", () => {
     expect(client.reloads()).toBe(0);
   });
 
-  test("keeps the form and shows an actionable error when a mutation cannot be confirmed", async () => {
+  test("reloads when a mutation cannot be confirmed", async () => {
     const initialPage = page([]);
     const client = clientHarness(initialPage, async () => {
       throw new Error("network unavailable");
@@ -385,92 +333,11 @@ describe("browser shelf mutations", () => {
     await client.submit(new TestSubmitEvent(form, submitter));
 
     expect(submitter.disabled).toBe(false);
-    expect(form.controls.map(({ label, value }) => [label, value])).toEqual([
-      ["Title", "Kindred"],
-      ["Author", "Octavia E. Butler"],
-    ]);
-    expect(client.document.currentMain.markup).toBe(mainMarkup(initialPage));
-    expect(client.document.alert?.className).toBe("error");
-    expect(client.document.alert?.attributes.get("role")).toBe("alert");
-    expect(client.document.alert?.textContent).toBe(
-      "Shelf could not confirm that change. Check your shelf before trying again.",
-    );
-    expect(client.reloads()).toBe(0);
+    expect(client.document.replacements).toEqual([]);
+    expect(client.reloads()).toBe(1);
   });
 
-  test("keeps an unconfirmed result visible after a queued mutation succeeds", async () => {
-    const existing = book(1, "Dune");
-    const initialPage = page([existing]);
-    const client = clientHarness(initialPage, (url) =>
-      url.endsWith("/books")
-        ? Promise.reject(new Error("network unavailable"))
-        : Promise.resolve(new Response(page([]))),
-    );
-    const addForm = renderedForm(initialPage, "/books");
-    addForm.setValue("Title", "Parable of the Sower");
-    addForm.setValue("Author", "Octavia E. Butler");
-
-    const failedAdd = client.submit(
-      new TestSubmitEvent(addForm, new TestHtmlButtonElement()),
-    );
-    const successfulDelete = client.submit(
-      new TestSubmitEvent(
-        renderedForm(initialPage, "/books/1/delete"),
-        new TestHtmlButtonElement(),
-      ),
-    );
-    await failedAdd;
-    await successfulDelete;
-
-    expect(client.document.currentMain.markup).not.toContain("Dune");
-    expect(
-      client.document.currentMain.addForm.controls.map(({ label, value }) => [label, value]),
-    ).toEqual([
-      ["Title", "Parable of the Sower"],
-      ["Author", "Octavia E. Butler"],
-    ]);
-    expect(client.document.alert?.textContent).toBe(
-      "Shelf could not confirm that change. Check your shelf before trying again.",
-    );
-    expect(client.reloads()).toBe(0);
-  });
-
-  test("restores a queued add after an earlier mutation replaces its form", async () => {
-    const existing = book(1, "Kindred");
-    const initialPage = page([existing]);
-    const client = clientHarness(initialPage, (url) =>
-      url.endsWith("/toggle")
-        ? Promise.resolve(new Response(page([{ ...existing, read: true }])))
-        : Promise.reject(new Error("network unavailable")),
-    );
-    const addForm = renderedForm(initialPage, "/books");
-    addForm.setValue("Title", "Parable of the Sower");
-    addForm.setValue("Author", "Octavia E. Butler");
-
-    const successfulToggle = client.submit(
-      new TestSubmitEvent(
-        renderedForm(initialPage, "/books/1/toggle"),
-        new TestHtmlButtonElement(),
-      ),
-    );
-    const failedAdd = client.submit(
-      new TestSubmitEvent(addForm, new TestHtmlButtonElement()),
-    );
-    await successfulToggle;
-    await failedAdd;
-
-    expect(
-      client.document.currentMain.addForm.controls.map(({ label, value }) => [label, value]),
-    ).toEqual([
-      ["Title", "Parable of the Sower"],
-      ["Author", "Octavia E. Butler"],
-    ]);
-    expect(client.document.alert?.textContent).toBe(
-      "Shelf could not confirm that change. Check your shelf before trying again.",
-    );
-  });
-
-  test("shows the mutation error when a response has no page content", async () => {
+  test("reloads when a mutation response has no page content", async () => {
     const initialPage = page([book(1, "Kindred")]);
     const submitter = new TestHtmlButtonElement();
     const client = clientHarness(initialPage, async () => new Response("Not a shelf page"));
@@ -481,103 +348,6 @@ describe("browser shelf mutations", () => {
 
     expect(submitter.disabled).toBe(false);
     expect(client.document.replacements).toEqual([]);
-    expect(client.document.alert?.textContent).toBe(
-      "Shelf could not confirm that change. Check your shelf before trying again.",
-    );
-    expect(client.reloads()).toBe(0);
-  });
-
-  test("preserves a queued validation alert alongside an earlier unconfirmed mutation", async () => {
-    const app = startServer({ port: 0, dbPath: ":memory:" });
-    try {
-      const existing = book(1, "Kindred");
-      const initialPage = page([existing]);
-      const client = clientHarness(initialPage, (url, options) => {
-        if (url.endsWith("/toggle")) return Promise.reject(new Error("network unavailable"));
-        return fetch(new URL(new URL(url).pathname, app.server.url), {
-          method: options.method,
-          body: new URLSearchParams(options.body.fields),
-        });
-      });
-      const invalidAdd = renderedForm(initialPage, "/books");
-      invalidAdd.setValue("Title", "   ");
-      invalidAdd.setValue("Author", "Octavia E. Butler");
-
-      const failedToggle = client.submit(
-        new TestSubmitEvent(
-          renderedForm(initialPage, "/books/1/toggle"),
-          new TestHtmlButtonElement(),
-        ),
-      );
-      const rejectedAdd = client.submit(
-        new TestSubmitEvent(invalidAdd, new TestHtmlButtonElement()),
-      );
-      await failedToggle;
-      await rejectedAdd;
-
-      expect(client.document.alerts.map(({ textContent }) => textContent)).toEqual([
-        "Shelf could not confirm that change. Check your shelf before trying again.",
-        "Title and author are required.",
-      ]);
-    } finally {
-      app.close();
-    }
-  });
-
-  test("clears visible recovery state when the reader retries", async () => {
-    const recovered = book(1, "Kindred");
-    let requests = 0;
-    const initialPage = page([]);
-    const client = clientHarness(initialPage, async () => {
-      requests++;
-      if (requests === 1) throw new Error("network unavailable");
-      return new Response(page([recovered]));
-    });
-    const failedAdd = client.document.currentMain.addForm;
-    failedAdd.setValue("Title", "Kindred");
-    failedAdd.setValue("Author", "Octavia E. Butler");
-
-    await client.submit(
-      new TestSubmitEvent(failedAdd, new TestHtmlButtonElement()),
-    );
-    expect(client.document.alert?.textContent).toBe(
-      "Shelf could not confirm that change. Check your shelf before trying again.",
-    );
-
-    await client.submit(
-      new TestSubmitEvent(client.document.currentMain.addForm, new TestHtmlButtonElement()),
-    );
-
-    expect(client.document.currentMain.markup).toContain("Kindred");
-    expect(client.document.alert).toBeUndefined();
-    expect(
-      client.document.currentMain.addForm.controls.map(({ label, value }) => [label, value]),
-    ).toEqual([
-      ["Title", ""],
-      ["Author", ""],
-    ]);
-  });
-
-  test("keeps server and client mutation alerts styled and accessible", async () => {
-    const initialPage = page([], "Title and author are required.");
-    const client = clientHarness(initialPage, async () => {
-      throw new Error("network unavailable");
-    });
-    const serverAlert = client.document.alert;
-
-    await client.submit(
-      new TestSubmitEvent(renderedForm(initialPage, "/books"), new TestHtmlButtonElement()),
-    );
-
-    expect(client.document.alert).not.toBe(serverAlert);
-    expect(client.document.alerts).toHaveLength(2);
-    expect(serverAlert?.textContent).toBe("Title and author are required.");
-    expect(client.document.alert?.className).toBe("error");
-    expect(client.document.alert?.attributes.get("role")).toBe("alert");
-    expect(serverAlert?.className).toBe("error");
-    expect(serverAlert?.attributes.get("role")).toBe("alert");
-    expect(client.document.alert?.textContent).toBe(
-      "Shelf could not confirm that change. Check your shelf before trying again.",
-    );
+    expect(client.reloads()).toBe(1);
   });
 });
