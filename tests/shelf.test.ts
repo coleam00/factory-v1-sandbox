@@ -27,7 +27,9 @@ describe("HTTP routes", () => {
 
   test("renders, creates, toggles, and deletes a book", async () => {
     let response = await fetch(base);
-    expect(await response.text()).toContain("<b>0</b> of 0 read");
+    let body = await response.text();
+    expect(body).toContain("Your shelf is empty. Add your first book above.");
+    expect(body).not.toContain('class="count"');
 
     response = await fetch(`${base}/books`, {
       method: "POST",
@@ -36,7 +38,7 @@ describe("HTTP routes", () => {
     });
     expect(response.status).toBe(303);
 
-    let body = await (await fetch(base)).text();
+    body = await (await fetch(base)).text();
     expect(body).toContain("Kindred");
     expect(body).toContain("<b>0</b> of 1 read");
 
@@ -45,7 +47,9 @@ describe("HTTP routes", () => {
     expect(body).toContain("<b>1</b> of 1 read");
 
     await fetch(`${base}/books/1/delete`, { method: "POST" });
-    expect(await (await fetch(base)).text()).toContain("<b>0</b> of 0 read");
+    body = await (await fetch(base)).text();
+    expect(body).toContain("Your shelf is empty. Add your first book above.");
+    expect(body).not.toContain('class="count"');
   });
 
   test("validates input and returns 404s", async () => {
