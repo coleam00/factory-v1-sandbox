@@ -2,6 +2,12 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { openShelf } from "../src/db";
 import { startServer } from "../src/server";
 
+function expectEmptyShelf(html: string) {
+  const contents = html.match(/<div class="empty">([\s\S]*?)<\/div>/)?.[1];
+  expect(contents).toBe("<p>Your shelf is empty. Add your first book above.</p>");
+  expect(html).not.toContain('class="count"');
+}
+
 describe("database", () => {
   test("adds, lists, toggles, and deletes books", () => {
     const db = openShelf(":memory:");
@@ -28,8 +34,7 @@ describe("HTTP routes", () => {
   test("renders, creates, toggles, and deletes a book", async () => {
     let response = await fetch(base);
     let body = await response.text();
-    expect(body).toContain("Your shelf is empty. Add your first book above.");
-    expect(body).not.toContain('class="count"');
+    expectEmptyShelf(body);
 
     response = await fetch(`${base}/books`, {
       method: "POST",
@@ -48,8 +53,7 @@ describe("HTTP routes", () => {
 
     await fetch(`${base}/books/1/delete`, { method: "POST" });
     body = await (await fetch(base)).text();
-    expect(body).toContain("Your shelf is empty. Add your first book above.");
-    expect(body).not.toContain('class="count"');
+    expectEmptyShelf(body);
   });
 
   test("validates input and returns 404s", async () => {

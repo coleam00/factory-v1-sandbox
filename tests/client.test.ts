@@ -104,6 +104,10 @@ function mainMarkup(html: string) {
   return markup;
 }
 
+function emptyStateContents(html: string) {
+  return html.match(/<div class="empty">([\s\S]*?)<\/div>/)?.[1];
+}
+
 function attribute(openingTag: string, name: string) {
   return openingTag.match(new RegExp(`${name}="([^"]*)"`))?.[1];
 }
@@ -277,6 +281,29 @@ describe("browser shelf mutations", () => {
     expect(requests).toBe(0);
     expect(client.document.replacements).toEqual([]);
     expect(client.reloads()).toBe(0);
+  });
+
+  test("deletes the final book in place", async () => {
+    const initialPage = page([book(1, "Kindred")]);
+    const requests: string[] = [];
+    const client = clientHarness(initialPage, async (url) => {
+      requests.push(url);
+      return new Response(page([]));
+    });
+    const event = new TestSubmitEvent(
+      renderedForm(initialPage, "/books/1/delete"),
+      new TestHtmlButtonElement(),
+    );
+
+    await client.submit(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(requests).toEqual([`${origin}/books/1/delete`]);
+    expect(client.reloads()).toBe(0);
+    expect(emptyStateContents(client.document.currentMain.markup)).toBe(
+      "<p>Your shelf is empty. Add your first book above.</p>",
+    );
+    expect(client.document.currentMain.markup).not.toContain('class="count"');
   });
 
   test("serializes overlapping mutations before installing their snapshots", async () => {
