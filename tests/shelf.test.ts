@@ -151,6 +151,39 @@ describe("JSON export", () => {
     }
   });
 
+  test("orders books by numeric ID without truncating stored strings", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "shelf-export-order-"));
+    const dbPath = join(directory, "shelf.db");
+    const longTitle = `Z${" title".repeat(40)}`;
+    const longAuthor = `Z${" author".repeat(35)}`;
+    const shelf = openShelf(dbPath);
+    const lowerId = shelf.add(longTitle, longAuthor);
+    shelf.close();
+
+    const seed = new Database(dbPath, { safeIntegers: true });
+    seed
+      .query("INSERT INTO books (id, title, author) VALUES (?, ?, ?)")
+      .run(10n, "A title", "A author");
+    seed.close();
+
+    const app = startServer({ port: 0, dbPath });
+    try {
+      const response = await fetch(`${app.server.url.origin}/books/export.json`);
+      const books = (await response.json()) as Array<{
+        id: number;
+        title: string;
+        author: string;
+      }>;
+
+      expect(books.map(({ id }) => id)).toEqual([Number(lowerId), 10]);
+      expect(books[0]?.title).toBe(longTitle);
+      expect(books[0]?.author).toBe(longAuthor);
+    } finally {
+      app.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test("exports an existing shelf exactly without changing it", async () => {
     const directory = mkdtempSync(join(tmpdir(), "shelf-export-"));
     const dbPath = join(directory, "shelf.db");
