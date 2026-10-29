@@ -38,7 +38,7 @@ describe("HTTP routes", () => {
     expect(body).toContain("<b>0</b> of 0 read");
     expect(body).toContain('<input name="title" required');
     expect(body).toContain('<input name="author" required');
-    expect(body).not.toContain("maxlength");
+    expect(body).not.toMatch(/\bmaxlength\s*=/i);
 
     response = await addBook("Kindred", "Octavia E. Butler");
     expect(response.status).toBe(303);
