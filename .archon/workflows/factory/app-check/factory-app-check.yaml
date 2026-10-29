@@ -113,7 +113,7 @@ nodes:
     command: check
     depends_on: [prepare]
     when: "$scope.output.run == true"
-    model: large
+    model: ['@factory-reviewer', large]
     mutates_checkout: false
     with:
       checkout: "$prepare.output.temp"

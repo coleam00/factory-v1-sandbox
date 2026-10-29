@@ -18,7 +18,7 @@ if (import.meta.main) {
   const depth = env("depth", "light") as "light" | "normal" | "deep";
   if (!config.holdouts.enabled || depth === "light") emit({ ids: [] });
   else {
-    const configured = config.holdouts.dir.replace(/^~(?=[/\\]|$)/, homedir());
+    const configured = config.holdouts.path.replace(/^~(?=[/\\]|$)/, homedir());
     const dir = resolve(configured);
     if (!existsSync(dir)) throw new Error("configured holdout directory does not exist");
     const ids = configuredHoldoutIds(readdirSync(dir, { withFileTypes: true }).filter(entry => entry.isFile()).map(entry => entry.name));

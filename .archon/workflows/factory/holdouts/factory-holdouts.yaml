@@ -20,7 +20,7 @@ nodes:
     command: write
     depends_on: [config]
     when: "$config.output.enabled == true"
-    model: large
+    model: ['@factory-reviewer', large]
     mutates_checkout: false
     with: { repo_path: "$INPUTS.repo_path", number: "$INPUTS.number", holdout_dir: "$config.output.dir" }
     output_format:

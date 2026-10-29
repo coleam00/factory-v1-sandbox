@@ -22,57 +22,62 @@ bun run typecheck
 
 ## Factory
 
-This repository adds a project-scoped software-factory layer to Archon's bundled SDLC pack. It does not copy or override any file under `.archon/workflows/sdlc/`.
+This repository adopts the project-scoped factory package alongside Archon's bundled SDLC pack. It does not copy or override files under `.archon/workflows/sdlc/`.
 
 ### Workflows
 
-- `factory-backlog --input repo_path=OWNER/REPO --input number=N` slices a PRD issue into ordered, deduplicated issues. Use `prd_path=path/to/prd.md` instead of `number` for a checked-in PRD. Each issue has Problem, Why, Why now, Outcome, Invariants, and Acceptance, and the first is a runnable end-to-end increment.
-- `factory-holdouts --input repo_path=OWNER/REPO --input number=N` writes one to three private black-box scenarios for an issue. It writes only to the configured directory outside the checkout and never posts scenario content to GitHub.
-- `factory-app-check --input repo_path=OWNER/REPO [--input pr=N]` selects the oldest eligible PR, including drafts (or the named PR), posts a pending status, merges its head into the selected base commit in a temporary worktree, runs the app through `agent-browser`, seals fresh evidence, and updates one marked PR comment. A failed or incomplete line posts `factory/app-check` failure. A non-front-end change posts success with a skip reason.
-- `factory-manager --input repo_path=OWNER/REPO` runs one medium-tier policy agent. Bind it every 30 minutes or to attention events; the workflow contains no timer. It answers only decisions explicitly settled by `.archon/sdlc/policy/`, reports untouched questions and runs with no event for more than two hours, and suggests policy lines without writing them.
+- `factory-backlog --input repo_path=OWNER/REPO --input number=N` slices a PRD issue into ordered, deduplicated issues. Use `prd_path=path/to/prd.md` instead of `number` for a checked-in PRD.
+- `factory-holdouts --input repo_path=OWNER/REPO --input number=N` writes private black-box scenarios only to the configured external directory. It never posts scenario content to GitHub.
+- `factory-app-check --input repo_path=OWNER/REPO [--input pr=N]` checks an eligible PR head merged with the current base head, runs the isolated app through `agent-browser`, seals evidence, and publishes the `factory/app-check` and `factory/policy` statuses.
+- `factory-manager --input repo_path=OWNER/REPO` answers only attention decisions explicitly settled by `.archon/sdlc/policy/`. It reports untouched questions and stale runs and can suggest policy lines without writing them.
+- `factory-deploy --input revision=<full-commit-sha>` performs only the revision-aware deployment documented in `DEPLOY.md`. It is never scheduled or enabled by setup.
+- `factory-setup` validates `.archon/factory.yaml`, applies managed autonomy blocks while preserving surrounding policy prose, and writes supported project model configuration.
 
-`factory/policy` is deterministic and does not parse issue prose. A PR touching a configured protected path fails that status unless the workflow is launched with a JSON `protected_grant` input whose `head` and `paths` exactly equal the selected head and complete changed protected-file set. For example: `--input protected_grant='{"head":"<full-head-sha>","paths":[".archon/factory.yaml"]}'`. Restrict this input to operator-launched runs; the workflow run and its recorded inputs are the audit record. Extra paths, a stale head, malformed JSON, and prose that merely mentions a path all deny the change. The app check still runs so an owner ruling does not hide behavioral evidence.
+Factory workflow fixtures are dry-run stubs. They do not create issues, comments, statuses, merges, triggers, or deployments. Exercise them with:
 
-### Configuration
+```sh
+archon workflow test .archon/workflows/factory
+```
 
-`.archon/factory.yaml` is the single factory configuration:
+### Configuration and setup
 
-- `app_check.enabled` turns app checking on or off.
-- `app_check.trigger` is `always`, `frontend`, or `never`. `frontend` matches changed files against `frontend_paths`.
-- `app_check.depth` is `light`, `normal`, `deep`, or `auto`; auto maps `archon-size-s` to light, `archon-size-l` to deep, and other or missing sizes to normal.
-- `holdouts.enabled` controls private scenarios; `holdouts.dir` must remain outside the repository so normal/deep checks can enumerate scenario IDs before the checker alone reads their contents. Missing configured scenarios fail closed.
+`.archon/factory.yaml` is the project-owned factory configuration:
+
+- `project.repo_host` and `project.repo_path` identify `github.com/coleam00/factory-v1-sandbox`.
+- `app_check.enabled` controls app checking. `app_check.trigger` is `always`, `frontend`, or `never`; `frontend` matches changed files against `frontend_paths`.
+- `app_check.depth` is `light`, `normal`, `deep`, or `auto`. Auto maps `archon-size-s` to light, `archon-size-l` to deep, and other or missing sizes to normal.
+- `holdouts.enabled` controls private scenarios. `holdouts.path` is the absolute external Shelf holdout path. Do not inspect that directory during implementation.
 - `protected_paths` contains repository-root globs checked by `factory/policy`.
-- `human_in_the_loop` is `supervised`, `standard`, or `autonomous`.
-- `app.start`, `port_env`, `db_env`, and `health_path` tell the black-box checker how to start an isolated app and detect readiness.
+- `autonomy` selects the `supervised`, `standard`, or `autonomous` managed policy preset.
+- `app.prepare`, `app.start`, `app.port_env`, `app.database_env`, and `app.health_path` tell app-check how to prepare and start an isolated app and detect readiness.
+- `models.assistant` is explicitly `codex`. Empty `models.tiers` and `models.aliases` inherit the all-Codex profiles from the sandbox Archon home.
+- `triggers.enabled` remains `false`. The root operator owns the existing external timer configurations and schedules, so setup does not generate or register replacements.
 
-The human-in-the-loop preset is a declaration for the matching project policy in `.archon/sdlc/policy/merge.md`. Keep the corresponding lines there:
+After changing factory configuration, run setup from this checkout and inspect the completed run and exact diff:
 
-- `supervised`: `Ask first: every pull request requires an owner merge ruling.`
-- `standard`: `Clear to merge: a bug fix, a small feature inside MISSION.md, tests or docs, with green CI.` and `Ask first: protected paths, schema/dependency changes, or product scope not settled by MISSION.md.`
-- `autonomous`: `Clear to merge: every in-scope pull request with a Ready review, green required checks, and no protected path.` and `Ask first: only an explicit policy conflict or unresolved product-scope choice.`
+```sh
+archon workflow run factory-setup --detach
+archon workflow attention --json
+archon workflow get <run-id> --json
+git diff -- .archon
+```
 
-The checked-in policy currently implements `standard`. Changing the preset without changing the policy lines does not silently broaden authority; the manager follows written policy.
+Setup writes only marked managed blocks in triage, build, and merge policy files. Shelf-specific prose, `rulings.md`, and `maintainers.json` remain project-owned. With triggers disabled, setup writes no trigger JSON and never installs or fires a timer.
 
-### Merge protection
+### App-check and merge protection
 
-In GitHub branch protection for `main`, enable “Require status checks to pass before merging”, require the repository's CI check, `factory/app-check`, and `factory/policy`, and enable the strict “Require branches to be up to date before merging” option. Strict mode is required: GitHub commit statuses are attached to a head commit, so only the up-to-date rule prevents a previously green head from merging after the base advances but before another factory run posts a status. The app-check status description also carries a fingerprint of the exact base branch name and commit; selection resolves the branch tip through GitHub's ref API and ignores a status for any other base, preparation verifies both fetched commits, and publication resolves the ref again and turns the result into failure if the PR head or base changed while it ran.
+`factory-app-check` tests a PR head merged with the current base tip. Publication rereads the PR and fails if its head or base changed. A pending status older than two hours is eligible for recovery. Evidence must be newer than preparation, every check line must cite a real file, and `INCOMPLETE` is failure.
 
-Run this queue with one active launch per repository. For a native binding, use a repository-specific `resource`, `capacity: 1`, and `overlap: "skip"`; pending statuses also make later selectors skip the same head/base. A pending status older than two hours is eligible for a recovery run, while the original run's finalizer normally converts errors to failure immediately. Publication still re-reads the PR, so an accidental concurrent or delayed run cannot publish success for a stale combination. The bundled merge queue already refuses pending or failing checks, requires a clean merge state, and re-reads checks at the PR head. Do not make the app-check workflow itself merge PRs.
+GitHub branch protection for `main` should require the repository CI check, `factory/app-check`, and `factory/policy`, with strict up-to-date branches enabled. Protected-path changes fail closed unless an operator-launched run supplies an exact grant for the selected head and complete changed protected-file set. The workflow does not merge PRs.
 
-### Pack composition and order
+### External holdouts
 
-Archon loads workflow names globally. To override a bundled SDLC workflow, place a workflow with the same bare YAML filename anywhere under this project's `.archon/workflows/`; the project workflow wins. Its commands and scripts do not fall through to the bundled workflow, so an override must carry every command and script it uses. This factory deliberately uses new bare names and may still `include:` bundled SDLC workflows when composition is needed.
+Holdouts remain outside the checkout at the absolute project-specific `holdouts.path`. Public reports contain scenario IDs and visible outcomes, not scenario text. External placement is context separation, not an operating-system security boundary; use host-level isolation when a hard boundary is required.
 
-The normal flow is:
+### Deployment
 
-1. Run `factory-backlog` for a PRD; created issues re-enter `archon-intake` through their normal issue events.
-2. Intake triages each issue. On the plan route, or by hand before build, run `factory-holdouts` for private adjacent coverage.
-3. `archon-build-queue` produces and reviews a PR.
-4. Run `factory-app-check` while the PR is still a draft. Automatic selection includes drafts, so the required status can conclude before SDLC's CI node marks the PR ready and waits for required checks.
-5. The SDLC CI node marks the PR ready; branch protection holds it while the app status is missing, pending, or failed.
-6. `archon-merge-queue` merges only after its existing review/CI gate and the required app status pass.
-7. Run `factory-manager` periodically or on attention to apply only decisions already covered by policy.
+`DEPLOY.md` authorizes a later root-operator acceptance deployment on localhost port 4197. It does not authorize setup to deploy and grants no production, remote-host, cloud, or database-migration authority. A later operator may run `factory-deploy` only for an exact full commit SHA and must verify health plus deployed revision as documented there.
 
-Factory workflow fixtures are dry-run stubs. They never create issues, comments, statuses, or merges; use `archon workflow test .archon/workflows/factory` to exercise them.
+### Pack composition
 
-Keeping holdouts outside the checkout is context separation, not a filesystem security boundary. An unrestricted Codex process could read that directory; the workflow convention and prompt keep scenario contents out of implementer context and public output, but operating-system isolation is required for a hard boundary.
+Archon loads project workflows beside its bundled workflows. This package uses factory-specific names and leaves the bundled SDLC pack in the engine checkout. The normal path is backlog slicing, native intake and build queues, holdout writing where required, app-check, native merge queue, and policy-bound management. Deployment remains a separate explicit operator action.
