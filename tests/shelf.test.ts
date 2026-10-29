@@ -1,4 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { openShelf } from "../src/db";
 import { startServer } from "../src/server";
 import { page } from "../src/views";
@@ -56,6 +60,29 @@ describe("database", () => {
     }
     expect(db.list()).toEqual([]);
     db.close();
+  });
+
+  test("rejects legacy books with empty titles when listing", () => {
+    const directory = mkdtempSync(join(tmpdir(), "shelf-legacy-title-"));
+    try {
+      for (const read of [0, 1]) {
+        const path = join(directory, `read-${read}.db`);
+        const current = openShelf(path);
+        current.close();
+
+        const legacy = new Database(path);
+        legacy
+          .query("INSERT INTO books (title, author, read) VALUES ('', 'Nobody', ?)")
+          .run(read);
+        legacy.close();
+
+        const reopened = openShelf(path);
+        expect(() => reopened.list()).toThrow("Stored book 1 has an empty title.");
+        reopened.close();
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });
 

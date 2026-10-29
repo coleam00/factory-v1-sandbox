@@ -37,11 +37,14 @@ export function openShelf(path = process.env.SHELF_DB ?? "shelf.db") {
 
   return {
     list(): Book[] {
-      return list.all().map(({ created_at, read, ...book }) => ({
-        ...book,
-        read: Boolean(read),
-        createdAt: created_at,
-      }));
+      return list.all().map(({ created_at, read, ...book }) => {
+        if (!book.title.trim()) throw new Error(`Stored book ${book.id} has an empty title.`);
+        return {
+          ...book,
+          read: Boolean(read),
+          createdAt: created_at,
+        };
+      });
     },
     add(title: string, author: string) {
       const normalizedTitle = title.trim();
