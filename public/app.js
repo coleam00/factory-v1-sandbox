@@ -1,6 +1,11 @@
 let pendingMutation = Promise.resolve();
+let mutationError = "";
+let addRecoveryValues = [];
 
-function showMutationError() {
+const mutationErrorMessage =
+  "Shelf could not confirm that change. Check your shelf before trying again.";
+
+function showMutationError(message) {
   let error = document.querySelector('main [role="alert"]');
   if (!error) {
     error = document.createElement("p");
@@ -8,7 +13,17 @@ function showMutationError() {
     error.setAttribute("role", "alert");
     document.querySelector("main")?.prepend(error);
   }
-  error.textContent = "Shelf could not confirm that change. Check your shelf before trying again.";
+  error.textContent = message;
+}
+
+function restoreAddValues(values) {
+  const form = document.querySelector("form.add");
+  if (!(form instanceof HTMLFormElement)) return;
+
+  for (const [name, value] of values) {
+    const control = form.elements.namedItem(name);
+    if (control && "value" in control) control.value = value;
+  }
 }
 
 document.addEventListener("submit", async (event) => {
@@ -23,8 +38,15 @@ document.addEventListener("submit", async (event) => {
   event.preventDefault();
   const action = form.action;
   const body = new FormData(form);
+  const addValues = form.classList.contains("add")
+    ? [...body.entries()].filter((entry) => typeof entry[1] === "string")
+    : [];
   const submitter = event.submitter;
   if (submitter instanceof HTMLButtonElement) submitter.disabled = true;
+  if (mutationError) {
+    mutationError = "";
+    addRecoveryValues = [];
+  }
 
   pendingMutation = pendingMutation.then(async () => {
     try {
@@ -40,9 +62,16 @@ document.addEventListener("submit", async (event) => {
         throw new Error("Shelf response did not contain the page content");
       }
       currentMain.replaceWith(nextMain);
+      if (mutationError) {
+        restoreAddValues(addRecoveryValues);
+        showMutationError(mutationError);
+      }
     } catch {
       if (submitter instanceof HTMLButtonElement) submitter.disabled = false;
-      showMutationError();
+      mutationError = mutationErrorMessage;
+      if (addValues.length) addRecoveryValues = addValues;
+      restoreAddValues(addRecoveryValues);
+      showMutationError(mutationError);
     }
   });
 
