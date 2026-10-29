@@ -87,32 +87,59 @@ async function connectCdp(url: string) {
   };
 }
 
+type CdpClient = Awaited<ReturnType<typeof connectCdp>>;
+
+async function click(cdp: CdpClient, selector: string) {
+  const evaluated = (await cdp.send("Runtime.evaluate", {
+    returnByValue: true,
+    expression: `(() => {
+      const element = document.querySelector(${JSON.stringify(selector)});
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    })()`,
+  })) as { result: { value: { x: number; y: number } | null } };
+  const point = evaluated.result.value;
+  if (!point) throw new Error(`Could not find ${selector}`);
+
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
+  await cdp.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    button: "left",
+    clickCount: 1,
+    ...point,
+  });
+  await cdp.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    button: "left",
+    clickCount: 1,
+    ...point,
+  });
+}
+
 test(
   "keeps complete long book text and controls usable at 320px",
   async () => {
-    const app = startServer({ port: 0, dbPath: ":memory:" });
-    const profile = mkdtempSync(join(tmpdir(), "shelf-browser-"));
-    const browser = Bun.spawn([
-      chromeExecutable(),
-      "--headless=new",
-      "--no-sandbox",
-      "--disable-gpu",
-      "--remote-debugging-port=0",
-      `--user-data-dir=${profile}`,
-      "about:blank",
-    ]);
-    let cdp: Awaited<ReturnType<typeof connectCdp>> | undefined;
+    let app: ReturnType<typeof startServer> | undefined;
+    let profile: string | undefined;
+    let browser: ReturnType<typeof Bun.spawn> | undefined;
+    let cdp: CdpClient | undefined;
 
     try {
+      app = startServer({ port: 0, dbPath: ":memory:" });
+      profile = mkdtempSync(join(tmpdir(), "shelf-browser-"));
+      browser = Bun.spawn([
+        chromeExecutable(),
+        "--headless=new",
+        "--no-sandbox",
+        "--disable-gpu",
+        "--remote-debugging-port=0",
+        `--user-data-dir=${profile}`,
+        "about:blank",
+      ]);
+
       const title = "T".repeat(200);
       const author = "A".repeat(200);
-      const created = await fetch(new URL("/books", app.server.url), {
-        method: "POST",
-        body: new URLSearchParams({ title, author }),
-        redirect: "manual",
-      });
-      expect(created.status).toBe(303);
-
       const port = await devtoolsPort(profile);
       const target = (await (
         await fetch(`http://127.0.0.1:${port}/json/new?about%3Ablank`, { method: "PUT" })
@@ -129,6 +156,23 @@ test(
       const loaded = cdp.event("Page.loadEventFired");
       await cdp.send("Page.navigate", { url: app.server.url.href });
       await loaded;
+
+      const renderedForm = (await cdp.send("Runtime.evaluate", {
+        returnByValue: true,
+        expression: `(() => ({
+          titleMaxLength: document.querySelector('input[name="title"]').maxLength,
+          authorMaxLength: document.querySelector('input[name="author"]').maxLength,
+        }))()`,
+      })) as { result: { value: { titleMaxLength: number; authorMaxLength: number } } };
+      expect(renderedForm.result.value).toEqual({ titleMaxLength: 200, authorMaxLength: 200 });
+
+      await click(cdp, 'input[name="title"]');
+      await cdp.send("Input.insertText", { text: title });
+      await click(cdp, 'input[name="author"]');
+      await cdp.send("Input.insertText", { text: author });
+      const added = cdp.event("Page.loadEventFired");
+      await click(cdp, ".add button");
+      await added;
 
       const evaluated = (await cdp.send("Runtime.evaluate", {
         returnByValue: true,
@@ -222,12 +266,56 @@ test(
         focusOrder.push(focused.result.value);
       }
       expect(focusOrder).toEqual(["title", "author", "add", "check", "delete"]);
+
+      const toggled = cdp.event("Page.loadEventFired");
+      await click(cdp, ".check");
+      await toggled;
+      const readState = (await cdp.send("Runtime.evaluate", {
+        returnByValue: true,
+        expression: `(() => ({
+          count: document.querySelector('.count').textContent.trim(),
+          action: document.querySelector('.check').getAttribute('aria-label'),
+          isRead: document.querySelector('.book').classList.contains('is-read'),
+        }))()`,
+      })) as {
+        result: { value: { count: string; action: string; isRead: boolean } };
+      };
+      expect(readState.result.value).toEqual({ count: "1 of 1 read", action: "Mark unread", isRead: true });
+
+      const dialog = cdp.event("Page.javascriptDialogOpening");
+      const deleted = cdp.event("Page.loadEventFired");
+      const deleteClick = click(cdp, ".delete");
+      await dialog;
+      await cdp.send("Page.handleJavaScriptDialog", { accept: true });
+      await deleteClick;
+      await deleted;
+      const emptyState = (await cdp.send("Runtime.evaluate", {
+        returnByValue: true,
+        expression: `(() => ({
+          count: document.querySelector('.count').textContent.trim(),
+          books: document.querySelectorAll('.book').length,
+          message: document.querySelector('.empty p').textContent,
+        }))()`,
+      })) as { result: { value: { count: string; books: number; message: string } } };
+      expect(emptyState.result.value).toEqual({
+        count: "0 of 0 read",
+        books: 0,
+        message: "Your shelf is empty.",
+      });
     } finally {
       cdp?.close();
-      browser.kill();
-      await browser.exited;
-      app.close();
-      rmSync(profile, { recursive: true, force: true });
+      try {
+        if (browser) {
+          browser.kill();
+          await browser.exited;
+        }
+      } finally {
+        try {
+          app?.close();
+        } finally {
+          if (profile) rmSync(profile, { recursive: true, force: true });
+        }
+      }
     }
   },
   15_000,
