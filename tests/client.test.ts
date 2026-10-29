@@ -25,10 +25,6 @@ class TestHtmlFormElement {
   }
 }
 
-class TestHtmlButtonElement {
-  disabled = false;
-}
-
 class TestFormData {
   readonly fields: Record<string, string>;
 
@@ -40,10 +36,7 @@ class TestFormData {
 class TestSubmitEvent {
   defaultPrevented = false;
 
-  constructor(
-    readonly target: TestHtmlFormElement,
-    readonly submitter: TestHtmlButtonElement,
-  ) {}
+  constructor(readonly target: TestHtmlFormElement) {}
 
   preventDefault() {
     this.defaultPrevented = true;
@@ -171,7 +164,6 @@ function clientHarness(
   new Function(
     "document",
     "HTMLFormElement",
-    "HTMLButtonElement",
     "confirm",
     "fetch",
     "FormData",
@@ -181,7 +173,6 @@ function clientHarness(
   )(
     document,
     TestHtmlFormElement,
-    TestHtmlButtonElement,
     confirm,
     fetch,
     TestFormData,
@@ -225,7 +216,7 @@ describe("browser shelf mutations", () => {
       const form = renderedForm(initialPage, "/books");
       form.setValue("Title", "Kindred");
       form.setValue("Author", "Octavia E. Butler");
-      const event = new TestSubmitEvent(form, new TestHtmlButtonElement());
+      const event = new TestSubmitEvent(form);
 
       await client.submit(event);
 
@@ -240,7 +231,7 @@ describe("browser shelf mutations", () => {
     }
   });
 
-  test("freezes an add payload when it joins the mutation queue", async () => {
+  test("freezes an add payload at submission", async () => {
     const existing = book(1, "Kindred");
     const initialPage = page([existing]);
     const firstResponse = deferred<Response>();
@@ -251,14 +242,11 @@ describe("browser shelf mutations", () => {
         ? firstResponse.promise
         : Promise.resolve(new Response(page([book(2, "Submitted title"), existing])));
     });
-    const toggle = new TestSubmitEvent(
-      renderedForm(initialPage, "/books/1/toggle"),
-      new TestHtmlButtonElement(),
-    );
+    const toggle = new TestSubmitEvent(renderedForm(initialPage, "/books/1/toggle"));
     const addForm = renderedForm(initialPage, "/books");
     addForm.setValue("Title", "Submitted title");
     addForm.setValue("Author", "Submitted author");
-    const add = new TestSubmitEvent(addForm, new TestHtmlButtonElement());
+    const add = new TestSubmitEvent(addForm);
 
     const firstSubmission = client.submit(toggle);
     const addSubmission = client.submit(add);
@@ -293,7 +281,7 @@ describe("browser shelf mutations", () => {
       },
     );
     const form = renderedForm(initialPage, "/books/1/delete");
-    const event = new TestSubmitEvent(form, new TestHtmlButtonElement());
+    const event = new TestSubmitEvent(form);
 
     await client.submit(event);
 
@@ -310,10 +298,7 @@ describe("browser shelf mutations", () => {
       const initialPage = await addServerBook(app);
       const requests: string[] = [];
       const client = serverBackedClient(initialPage, app, requests);
-      const event = new TestSubmitEvent(
-        renderedMutationForm(initialPage, "delete"),
-        new TestHtmlButtonElement(),
-      );
+      const event = new TestSubmitEvent(renderedMutationForm(initialPage, "delete"));
 
       await client.submit(event);
 
@@ -335,10 +320,7 @@ describe("browser shelf mutations", () => {
       const initialPage = await addServerBook(app);
       const requests: string[] = [];
       const client = serverBackedClient(initialPage, app, requests);
-      const event = new TestSubmitEvent(
-        renderedMutationForm(initialPage, "toggle"),
-        new TestHtmlButtonElement(),
-      );
+      const event = new TestSubmitEvent(renderedMutationForm(initialPage, "toggle"));
 
       await client.submit(event);
 
@@ -353,47 +335,6 @@ describe("browser shelf mutations", () => {
     }
   });
 
-  test("serializes overlapping mutations before installing their snapshots", async () => {
-    const first = book(1, "Kindred");
-    const second = book(2, "Dune");
-    const initialPage = page([second, first]);
-    const older = deferred<Response>();
-    const newer = deferred<Response>();
-    const requests: string[] = [];
-    const client = clientHarness(initialPage, (url) => {
-      requests.push(url);
-      return url.endsWith("/toggle") ? older.promise : newer.promise;
-    });
-    const toggle = new TestSubmitEvent(
-      renderedForm(initialPage, "/books/1/toggle"),
-      new TestHtmlButtonElement(),
-    );
-    const remove = new TestSubmitEvent(
-      renderedForm(initialPage, "/books/2/delete"),
-      new TestHtmlButtonElement(),
-    );
-
-    const firstSubmission = client.submit(toggle);
-    const secondSubmission = client.submit(remove);
-    newer.resolve(new Response(page([{ ...first, read: true }])));
-    await Promise.resolve();
-
-    expect(requests).toEqual([`${origin}/books/1/toggle`]);
-
-    older.resolve(new Response(page([second, { ...first, read: true }])));
-    await firstSubmission;
-    await secondSubmission;
-
-    expect(requests).toEqual([
-      `${origin}/books/1/toggle`,
-      `${origin}/books/2/delete`,
-    ]);
-    expect(client.document.replacements[0]).toContain("<b>1</b> of 2 read");
-    expect(client.document.currentMain.markup).toContain("<b>1</b> of 1 read");
-    expect(client.document.currentMain.markup).not.toContain("Dune");
-    expect(client.reloads()).toBe(0);
-  });
-
   test("reloads when a mutation cannot be confirmed", async () => {
     const initialPage = page([]);
     const client = clientHarness(initialPage, async () => {
@@ -402,25 +343,18 @@ describe("browser shelf mutations", () => {
     const form = renderedForm(initialPage, "/books");
     form.setValue("Title", "Kindred");
     form.setValue("Author", "Octavia E. Butler");
-    const submitter = new TestHtmlButtonElement();
+    await client.submit(new TestSubmitEvent(form));
 
-    await client.submit(new TestSubmitEvent(form, submitter));
-
-    expect(submitter.disabled).toBe(false);
     expect(client.document.replacements).toEqual([]);
     expect(client.reloads()).toBe(1);
   });
 
   test("reloads when a mutation response has no page content", async () => {
     const initialPage = page([book(1, "Kindred")]);
-    const submitter = new TestHtmlButtonElement();
     const client = clientHarness(initialPage, async () => new Response("Not a shelf page"));
 
-    await client.submit(
-      new TestSubmitEvent(renderedForm(initialPage, "/books/1/toggle"), submitter),
-    );
+    await client.submit(new TestSubmitEvent(renderedForm(initialPage, "/books/1/toggle")));
 
-    expect(submitter.disabled).toBe(false);
     expect(client.document.replacements).toEqual([]);
     expect(client.reloads()).toBe(1);
   });

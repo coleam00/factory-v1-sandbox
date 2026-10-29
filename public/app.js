@@ -1,5 +1,3 @@
-let pendingMutation = Promise.resolve();
-
 document.addEventListener("submit", async (event) => {
   const form = event.target;
   if (!(form instanceof HTMLFormElement) || form.method !== "post") return;
@@ -10,30 +8,20 @@ document.addEventListener("submit", async (event) => {
   }
 
   event.preventDefault();
-  const action = form.action;
-  const body = new FormData(form);
-  const submitter = event.submitter;
-  if (submitter instanceof HTMLButtonElement) submitter.disabled = true;
+  try {
+    const response = await fetch(form.action, {
+      method: "POST",
+      body: new FormData(form),
+    });
+    const nextPage = new DOMParser().parseFromString(await response.text(), "text/html");
+    const currentMain = document.querySelector("main");
+    const nextMain = nextPage.querySelector("main");
 
-  pendingMutation = pendingMutation.then(async () => {
-    try {
-      const response = await fetch(action, {
-        method: "POST",
-        body,
-      });
-      const nextPage = new DOMParser().parseFromString(await response.text(), "text/html");
-      const currentMain = document.querySelector("main");
-      const nextMain = nextPage.querySelector("main");
-
-      if (!currentMain || !nextMain) {
-        throw new Error("Shelf response did not contain the page content");
-      }
-      currentMain.replaceWith(nextMain);
-    } catch {
-      if (submitter instanceof HTMLButtonElement) submitter.disabled = false;
-      window.location.reload();
+    if (!currentMain || !nextMain) {
+      throw new Error("Shelf response did not contain the page content");
     }
-  });
-
-  await pendingMutation;
+    currentMain.replaceWith(nextMain);
+  } catch {
+    window.location.reload();
+  }
 });
