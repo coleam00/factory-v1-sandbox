@@ -61,10 +61,32 @@ describe("HTTP routes", () => {
   });
 
   test("validates input and returns 404s", async () => {
-    const invalid = await addBook("   ", "Nobody");
-    expect(invalid.status).toBe(400);
-    expect(await invalid.text()).toContain("Title and author are required");
+    for (const [title, author] of [
+      ["   ", "Nobody"],
+      ["Dune", "   "],
+    ]) {
+      const invalid = await addBook(title, author);
+      expect(invalid.status).toBe(400);
+      expect(await invalid.text()).toContain("Title and author are required");
+      expect(await (await fetch(base)).text()).toContain("<b>0</b> of 0 read");
+    }
     expect((await fetch(`${base}/missing`)).status).toBe(404);
+  });
+
+  test("rejects non-text book fields without changing the shelf", async () => {
+    for (const field of ["title", "author"] as const) {
+      const form = new FormData();
+      form.set("title", "Dune");
+      form.set("author", "Frank Herbert");
+      form.set(field, new Blob(["invalid"]), `${field}.txt`);
+
+      const response = await fetch(`${base}/books`, { method: "POST", body: form });
+      expect(response.status).toBe(400);
+      expect(await response.text()).toContain(
+        `${field === "title" ? "Title" : "Author"} must be text.`,
+      );
+      expect(await (await fetch(base)).text()).toContain("<b>0</b> of 0 read");
+    }
   });
 
   test("accepts trimmed title and author fields at 200 characters", async () => {
