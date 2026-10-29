@@ -1,0 +1,12 @@
+{
+  "name": "shelf",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/server.ts",
+    "start": "bun src/server.ts",
+    "test": "bun test",
+    "typecheck": "bun build src/server.ts --target=bun --outdir=.tmp/typecheck",
+    "lint": "bun run typecheck"
+  }
+}

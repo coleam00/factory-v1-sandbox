@@ -1,0 +1,7 @@
+node_modules/
+.bun-cache/
+.tmp/
+shelf.db
+shelf.db-shm
+shelf.db-wal
+*.log
