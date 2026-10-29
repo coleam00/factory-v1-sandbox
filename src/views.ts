@@ -26,7 +26,7 @@ export function page(books: Book[], error = "") {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Shelf</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
-<body><main>
+<body><a class="skip-link" href="#books">Skip to books</a><main>
   <header><div><h1>Shelf</h1><p>Your personal reading list</p></div><div class="count"><b>${read}</b> of ${books.length} read</div></header>
   <form class="add" method="post" action="/books">
     <label>Title<input name="title" required maxlength="200" placeholder="The Left Hand of Darkness"></label>
@@ -34,6 +34,6 @@ export function page(books: Book[], error = "") {
     <button>Add book</button>
   </form>
   ${error ? `<p class="error" role="alert">${escapeHtml(error)}</p>` : ""}
-  <section><h2>Books</h2>${rows ? `<ul>${rows}</ul>` : `<div class="empty"><p>Your shelf is empty.</p><span>Add a book to begin.</span></div>`}</section>
+  <section id="books" tabindex="-1"><h2>Books</h2>${rows ? `<ul>${rows}</ul>` : `<div class="empty"><p>Your shelf is empty.</p><span>Add a book to begin.</span></div>`}</section>
 </main></body></html>`;
 }

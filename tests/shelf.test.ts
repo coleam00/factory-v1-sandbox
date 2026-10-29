@@ -27,7 +27,10 @@ describe("HTTP routes", () => {
 
   test("renders, creates, toggles, and deletes a book", async () => {
     let response = await fetch(base);
-    expect(await response.text()).toContain("<b>0</b> of 0 read");
+    let body = await response.text();
+    expect(body).toContain("<b>0</b> of 0 read");
+    expect(body).toContain('<a class="skip-link" href="#books">Skip to books</a>');
+    expect(body).toContain('<section id="books" tabindex="-1"><h2>Books</h2>');
 
     response = await fetch(`${base}/books`, {
       method: "POST",
@@ -36,7 +39,7 @@ describe("HTTP routes", () => {
     });
     expect(response.status).toBe(303);
 
-    let body = await (await fetch(base)).text();
+    body = await (await fetch(base)).text();
     expect(body).toContain("Kindred");
     expect(body).toContain("<b>0</b> of 1 read");
 
