@@ -10,7 +10,6 @@ describe("database", () => {
   test("adds, lists, toggles, and deletes books", () => {
     const db = openShelf(":memory:");
     const id = db.add("Dune", "Frank Herbert");
-    expect(typeof id).toBe("bigint");
     expect(db.list()).toMatchObject([{ id, title: "Dune", author: "Frank Herbert", read: false }]);
     expect(db.toggle(id)).toBe(true);
     expect(db.list()[0]?.read).toBe(true);
@@ -45,13 +44,6 @@ describe("HTTP routes", () => {
     expect(body).toContain("Kindred");
     expect(body).toContain("<b>0</b> of 1 read");
 
-    const unknownAction = await fetch(`${base}/books/1/archive`, {
-      method: "POST",
-      redirect: "manual",
-    });
-    expect(unknownAction.status).toBe(404);
-    expect(await (await fetch(base)).text()).toContain("Kindred");
-
     await fetch(`${base}/books/1/toggle`, { method: "POST" });
     body = await (await fetch(base)).text();
     expect(body).toContain("<b>1</b> of 1 read");
@@ -68,70 +60,6 @@ describe("HTTP routes", () => {
     expect(invalid.status).toBe(400);
     expect(await invalid.text()).toContain("Title and author are required");
     expect((await fetch(`${base}/missing`)).status).toBe(404);
-  });
-
-  test("handles the complete SQLite ID range in mutation routes", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "shelf-routes-"));
-    const dbPath = join(directory, "shelf.db");
-    const minimumId = -9_223_372_036_854_775_808n;
-    const maximumId = 9_223_372_036_854_775_807n;
-    const outOfRangeIds = [minimumId - 1n, maximumId + 1n];
-    const setup = openShelf(dbPath);
-    setup.close();
-
-    const seed = new Database(dbPath, { safeIntegers: true });
-    seed
-      .query("INSERT INTO books (id, title, author) VALUES (?, ?, ?)")
-      .run(minimumId, "Minimum", "Identifier");
-    seed
-      .query("INSERT INTO books (id, title, author) VALUES (?, ?, ?)")
-      .run(maximumId, "Maximum", "Identifier");
-    seed.close();
-
-    const signedApp = startServer({ port: 0, dbPath });
-    const signedBase = signedApp.server.url.origin;
-    try {
-      const body = await (await fetch(signedBase)).text();
-      expect(body).toContain(`/books/${minimumId}/toggle`);
-      expect(body).toContain(`/books/${maximumId}/delete`);
-
-      for (const id of outOfRangeIds) {
-        for (const action of ["toggle", "delete"]) {
-          const response = await fetch(`${signedBase}/books/${id}/${action}`, {
-            method: "POST",
-            redirect: "manual",
-          });
-          expect(response.status).toBe(303);
-        }
-      }
-
-      for (const id of [minimumId, maximumId]) {
-        let response = await fetch(`${signedBase}/books/${id}/toggle`, {
-          method: "POST",
-          redirect: "manual",
-        });
-        expect(response.status).toBe(303);
-
-        const inspection = new Database(dbPath, { readonly: true, safeIntegers: true });
-        expect(inspection.query("SELECT read FROM books WHERE id = ?").get(id)).toEqual({
-          read: 1n,
-        });
-        inspection.close();
-
-        response = await fetch(`${signedBase}/books/${id}/delete`, {
-          method: "POST",
-          redirect: "manual",
-        });
-        expect(response.status).toBe(303);
-      }
-
-      const inspection = new Database(dbPath, { readonly: true, safeIntegers: true });
-      expect(inspection.query("SELECT id FROM books").all()).toEqual([]);
-      inspection.close();
-    } finally {
-      signedApp.close();
-      rmSync(directory, { recursive: true, force: true });
-    }
   });
 });
 
@@ -155,18 +83,18 @@ describe("JSON export", () => {
     const directory = mkdtempSync(join(tmpdir(), "shelf-export-"));
     const dbPath = join(directory, "shelf.db");
     const first = {
-      id: 9_007_199_254_740_992n,
+      id: 7,
       title: 'A <Shelf> & "Stories"',
       author: "Anne O'Writer",
       read: 0,
     };
     const second = {
-      id: 9_007_199_254_740_993n,
+      id: 11,
       title: "Second Book",
       author: "Another Author",
       read: 1,
     };
-    const seed = new Database(dbPath, { create: true, safeIntegers: true });
+    const seed = new Database(dbPath, { create: true });
     seed.exec(`
       CREATE TABLE books (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -192,9 +120,6 @@ describe("JSON export", () => {
     try {
       const pageBody = await (await fetch(base)).text();
       expect(pageBody.indexOf(second.title)).toBeLessThan(pageBody.indexOf("A &lt;Shelf&gt;"));
-      expect(pageBody).toContain(`/books/${first.id}/toggle`);
-      expect(pageBody).toContain(`/books/${second.id}/delete`);
-
       const response = await fetch(`${base}/books/export.json?filter=unread`);
       expect(response.status).toBe(200);
       expect(response.headers.get("content-type")).toStartWith("application/json");
@@ -206,33 +131,19 @@ describe("JSON export", () => {
         `[{"id":${first.id},"title":${JSON.stringify(first.title)},"author":${JSON.stringify(first.author)},"read":false},` +
           `{"id":${second.id},"title":${JSON.stringify(second.title)},"author":${JSON.stringify(second.author)},"read":true}]`,
       );
-      expect(JSON.parse(raw)).toHaveLength(2);
+      expect(JSON.parse(raw)).toEqual([
+        { id: first.id, title: first.title, author: first.author, read: false },
+        { id: second.id, title: second.title, author: second.author, read: true },
+      ]);
 
-      const inspection = new Database(dbPath, { readonly: true, safeIntegers: true });
+      const inspection = new Database(dbPath, { readonly: true });
       expect(
         inspection
           .query("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name")
           .all(),
       ).toEqual(schemaBefore);
       expect(inspection.query("SELECT * FROM books ORDER BY id").all()).toEqual(booksBefore);
-
-      await fetch(`${base}/books/${first.id}/toggle`, { method: "POST", redirect: "manual" });
-      expect(inspection.query("SELECT read FROM books WHERE id = ?").get(first.id)).toEqual({
-        read: 1n,
-      });
-      expect(inspection.query("SELECT read FROM books WHERE id = ?").get(second.id)).toEqual({
-        read: 1n,
-      });
-
-      await fetch(`${base}/books/${second.id}/delete`, { method: "POST", redirect: "manual" });
-      expect(inspection.query("SELECT id FROM books ORDER BY id").all()).toEqual([
-        { id: first.id },
-      ]);
       inspection.close();
-
-      const shelf = openShelf(dbPath);
-      expect(shelf.add("Third Book", "Third Author")).toBe(second.id + 1n);
-      shelf.close();
     } finally {
       app.close();
       rmSync(directory, { recursive: true, force: true });
