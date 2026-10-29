@@ -1,31 +1,32 @@
 import type { Book } from "./db";
 
-const defineField = <
-  const Options extends Record<string, { readonly label: string }>,
-  const Default extends keyof Options,
->(defaultValue: Default, options: Options) => ({ defaultValue, options });
-
 export const viewFields = {
-  filter: defineField("all", {
-    all: { label: "All books", includes: (_book: Book) => true },
-    unread: { label: "Unread only", includes: (book: Book) => !book.read },
-  }),
-  order: defineField("added", {
-    added: {
-      label: "Recently added",
-      compare: (left: Book, right: Book) =>
-        right.createdAt.localeCompare(left.createdAt) || right.id - left.id,
+  filter: {
+    defaultValue: "all",
+    options: {
+      all: { label: "All books", includes: (_book: Book) => true },
+      unread: { label: "Unread only", includes: (book: Book) => !book.read },
     },
-    title: {
-      label: "Title A-Z",
-      compare: (left: Book, right: Book) => {
-        const byTitle = left.title.localeCompare(right.title, undefined, {
-          sensitivity: "base",
-        });
-        return byTitle || right.id - left.id;
+  },
+  order: {
+    defaultValue: "added",
+    options: {
+      added: {
+        label: "Recently added",
+        compare: (left: Book, right: Book) =>
+          right.createdAt.localeCompare(left.createdAt) || right.id - left.id,
+      },
+      title: {
+        label: "Title A-Z",
+        compare: (left: Book, right: Book) => {
+          const byTitle = left.title.localeCompare(right.title, undefined, {
+            sensitivity: "base",
+          });
+          return byTitle || right.id - left.id;
+        },
       },
     },
-  }),
+  },
 } as const;
 
 export type ViewState = {
@@ -64,7 +65,7 @@ const query = (view: ViewState) => new URLSearchParams(view).toString();
 export const viewQuery = (view: ViewState) => `?${query(view).replaceAll("&", "&amp;")}`;
 
 export const viewLocation = (url: URL, view: ViewState) => {
-  const hasViewState = Object.keys(viewFields).some((field) => url.searchParams.has(field));
+  const hasViewState = url.searchParams.has("filter") || url.searchParams.has("order");
   return hasViewState ? `/?${query(view)}` : "/";
 };
 

@@ -35,8 +35,7 @@ export function startServer(options: { port?: number; dbPath?: string } = {}) {
       const match = url.pathname.match(/^\/books\/(\d+)\/(toggle|delete)$/);
       if (request.method === "POST" && match) {
         const id = Number(match[1]);
-        const changed = match[2] === "toggle" ? shelf.toggle(id) : shelf.remove(id);
-        if (!changed) return html(page(shelf.list(), view, "Book not found."), 404);
+        match[2] === "toggle" ? shelf.toggle(id) : shelf.remove(id);
         return redirect(viewLocation(url, view));
       }
       return new Response("Not found", { status: 404 });
