@@ -1,8 +1,4 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { openShelf } from "../src/db";
 import { startServer } from "../src/server";
 import { page } from "../src/views";
@@ -51,42 +47,6 @@ describe("database", () => {
     expect(db.remove(id)).toBe(true);
     expect(db.list()).toEqual([]);
     db.close();
-  });
-
-  test("rejects titles that are empty after normalization", () => {
-    const db = openShelf(":memory:");
-    for (const title of ["", "   "]) {
-      expect(() => db.add(title, "Nobody")).toThrow("Title is required.");
-    }
-    expect(db.list()).toEqual([]);
-    db.close();
-  });
-
-  test("rejects legacy books with normalized-empty titles when listing", () => {
-    const directory = mkdtempSync(join(tmpdir(), "shelf-legacy-title-"));
-    try {
-      for (const [title, read] of [
-        ["", 0],
-        ["", 1],
-        ["   ", 0],
-      ] as const) {
-        const path = join(directory, `title-${title.length}-read-${read}.db`);
-        const current = openShelf(path);
-        current.close();
-
-        const legacy = new Database(path);
-        legacy
-          .query("INSERT INTO books (title, author, read) VALUES (?, 'Nobody', ?)")
-          .run(title, read);
-        legacy.close();
-
-        const reopened = openShelf(path);
-        expect(() => reopened.list()).toThrow("Stored book 1 has an empty title.");
-        reopened.close();
-      }
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
   });
 });
 

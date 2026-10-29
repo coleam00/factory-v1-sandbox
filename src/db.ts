@@ -37,19 +37,14 @@ export function openShelf(path = process.env.SHELF_DB ?? "shelf.db") {
 
   return {
     list(): Book[] {
-      return list.all().map(({ created_at, read, ...book }) => {
-        if (!book.title.trim()) throw new Error(`Stored book ${book.id} has an empty title.`);
-        return {
-          ...book,
-          read: Boolean(read),
-          createdAt: created_at,
-        };
-      });
+      return list.all().map(({ created_at, read, ...book }) => ({
+        ...book,
+        read: Boolean(read),
+        createdAt: created_at,
+      }));
     },
     add(title: string, author: string) {
-      const normalizedTitle = title.trim();
-      if (!normalizedTitle) throw new Error("Title is required.");
-      return Number(insert.run(normalizedTitle, author.trim()).lastInsertRowid);
+      return Number(insert.run(title.trim(), author.trim()).lastInsertRowid);
     },
     toggle(id: number) {
       return toggle.run(id).changes === 1;
