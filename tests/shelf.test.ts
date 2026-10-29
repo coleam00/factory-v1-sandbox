@@ -29,8 +29,14 @@ describe("HTTP routes", () => {
     let response = await fetch(base);
     let body = await response.text();
     expect(body).toContain("<b>0</b> of 0 read");
-    expect(body).toContain('<a class="skip-link" href="#books">Skip to books</a>');
-    expect(body).toContain('<section id="books" tabindex="-1"><h2>Books</h2>');
+    const skipLinks = [
+      ...body.matchAll(
+        /<a class="skip-link" href="#([^"]+)">Skip to books<\/a>/g,
+      ),
+    ];
+    expect(skipLinks).toHaveLength(1);
+    const target = `<section id="${skipLinks[0]![1]}" tabindex="-1"><h2>Books</h2>`;
+    expect(body.split(target)).toHaveLength(2);
 
     response = await fetch(`${base}/books`, {
       method: "POST",
