@@ -15,5 +15,4 @@ const fetchedHead = run(["git", "rev-parse", headRef]);
 if (fetchedBase !== baseOid || fetchedHead !== head) throw new Error("pull request head/base changed before preparation");
 run(["git", "worktree", "add", "--detach", temp, fetchedBase]);
 run(["git", "merge", "--no-edit", fetchedHead], { cwd: temp });
-run(["bun", "install"], { cwd: temp });
 emit({ temp, merged: run(["git", "rev-parse", "HEAD"], { cwd: temp }), prepared_at: Date.now() });

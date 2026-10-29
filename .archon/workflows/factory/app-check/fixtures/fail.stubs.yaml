@@ -1,9 +1,9 @@
 config:
   app_check: { enabled: true, trigger: frontend, frontend_paths: ["public/**"], depth: auto }
-  holdouts: { enabled: true, dir: ~/.archon-v1test/holdouts/test }
+  holdouts: { enabled: true, path: "C:/private/project-holdouts" }
   protected_paths: [".archon/**"]
-  human_in_the_loop: standard
-  app: { start: "bun src/server.ts", port_env: PORT, db_env: SHELF_DB, health_path: "/" }
+  autonomy: standard
+  app: { prepare: "npm ci", start: "npm start", port_env: PORT, database_env: APP_DATABASE_PATH, health_path: "/health" }
 select: { found: true, pr: 8, head: bad123, files: ["src/views.ts"], base: main, base_oid: base123, issue: 12, issue_body: "## Acceptance\n- [ ] works", issue_labels: [archon-size-l] }
 pending: { posted: true }
 scope: { run: true, depth: deep, reason: selected }
@@ -22,7 +22,7 @@ publish: { state: failure, comment: updated }
 finalize: { recovered: false }
 cleanup: { cleaned: true, pid_file: true }
 fixture:
-  inputs: { repo_path: example/shelf, pr: "8", protected_grant: "" }
+  inputs: { repo_path: example/widgets, pr: "8", protected_grant: "" }
   expect: completed
   reached: [config, select, pending, scope, policy, holdouts, prepare, check, evidence, publish, finalize, cleanup]
 exec-code: true
