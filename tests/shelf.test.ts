@@ -1,6 +1,33 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { openShelf } from "../src/db";
 import { startServer } from "../src/server";
+import { page } from "../src/views";
+
+describe("page", () => {
+  test("names each read toggle for its book and next action", () => {
+    const body = page([
+      {
+        id: 1,
+        title: "Dune",
+        author: "Frank Herbert",
+        read: false,
+        createdAt: "2026-10-29 00:00:00",
+      },
+      {
+        id: 2,
+        title: 'A "Book" & <More>',
+        author: "Another Author",
+        read: true,
+        createdAt: "2026-10-29 00:00:00",
+      },
+    ]);
+
+    expect(body).toContain('aria-label="Mark Dune as read"');
+    expect(body).toContain(
+      'aria-label="Mark A &quot;Book&quot; &amp; &lt;More&gt; as unread"',
+    );
+  });
+});
 
 describe("database", () => {
   test("adds, lists, toggles, and deletes books", () => {
@@ -31,18 +58,20 @@ describe("HTTP routes", () => {
 
     response = await fetch(`${base}/books`, {
       method: "POST",
-      body: new URLSearchParams({ title: "Kindred", author: "Octavia E. Butler" }),
+      body: new URLSearchParams({ title: "Dune", author: "Frank Herbert" }),
       redirect: "manual",
     });
     expect(response.status).toBe(303);
 
     let body = await (await fetch(base)).text();
-    expect(body).toContain("Kindred");
+    expect(body).toContain("Dune");
+    expect(body).toContain('aria-label="Mark Dune as read"');
     expect(body).toContain("<b>0</b> of 1 read");
 
     await fetch(`${base}/books/1/toggle`, { method: "POST" });
     body = await (await fetch(base)).text();
     expect(body).toContain("<b>1</b> of 1 read");
+    expect(body).toContain('aria-label="Mark Dune as unread"');
 
     await fetch(`${base}/books/1/delete`, { method: "POST" });
     expect(await (await fetch(base)).text()).toContain("<b>0</b> of 0 read");
