@@ -8,10 +8,14 @@ export type Book = {
   createdAt: string;
 };
 
+export type ExportedBook = Pick<Book, "id" | "title" | "author" | "read">;
+
 type BookRow = Omit<Book, "read" | "createdAt"> & {
   read: number;
   created_at: string;
 };
+
+type ExportedBookRow = Omit<ExportedBook, "read"> & { read: number };
 
 export function openShelf(path = process.env.SHELF_DB ?? "shelf.db") {
   const db = new Database(path, { create: true });
@@ -29,6 +33,9 @@ export function openShelf(path = process.env.SHELF_DB ?? "shelf.db") {
   const list = db.query<BookRow, []>(
     "SELECT id, title, author, read, created_at FROM books ORDER BY id DESC",
   );
+  const exportList = db.query<ExportedBookRow, []>(
+    "SELECT id, title, author, read FROM books ORDER BY id ASC",
+  );
   const insert = db.query("INSERT INTO books (title, author) VALUES (?, ?)");
   const toggle = db.query(
     "UPDATE books SET read = CASE read WHEN 0 THEN 1 ELSE 0 END WHERE id = ?",
@@ -41,6 +48,14 @@ export function openShelf(path = process.env.SHELF_DB ?? "shelf.db") {
         ...book,
         read: Boolean(read),
         createdAt: created_at,
+      }));
+    },
+    exportBooks(): ExportedBook[] {
+      return exportList.all().map(({ id, title, author, read }) => ({
+        id,
+        title,
+        author,
+        read: Boolean(read),
       }));
     },
     add(title: string, author: string) {

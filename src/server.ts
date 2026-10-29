@@ -15,6 +15,11 @@ export function startServer(options: { port?: number; dbPath?: string } = {}) {
       const url = new URL(request.url);
 
       if (request.method === "GET" && url.pathname === "/") return html(page(shelf.list()));
+      if (request.method === "GET" && url.pathname === "/books/export.json") {
+        return Response.json(shelf.exportBooks(), {
+          headers: { "content-disposition": 'attachment; filename="shelf.json"' },
+        });
+      }
       if (request.method === "GET" && (url.pathname === "/app.js" || url.pathname === "/style.css")) {
         return new Response(Bun.file(join(publicDir, url.pathname.slice(1))));
       }

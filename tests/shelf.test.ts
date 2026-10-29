@@ -1,4 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { openShelf } from "../src/db";
 import { startServer } from "../src/server";
 
@@ -56,5 +60,70 @@ describe("HTTP routes", () => {
     expect(invalid.status).toBe(400);
     expect(await invalid.text()).toContain("Title and author are required");
     expect((await fetch(`${base}/missing`)).status).toBe(404);
+  });
+});
+
+describe("JSON export", () => {
+  let app: ReturnType<typeof startServer>;
+  let base: string;
+  let directory: string;
+  let dbPath: string;
+
+  beforeAll(() => {
+    directory = mkdtempSync(join(tmpdir(), "shelf-export-"));
+    dbPath = join(directory, "shelf.db");
+    app = startServer({ port: 0, dbPath });
+    base = app.server.url.origin;
+  });
+
+  afterAll(() => {
+    app.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  test("downloads every book as stable, non-mutating JSON", async () => {
+    const empty = await fetch(`${base}/books/export.json`);
+    expect(empty.status).toBe(200);
+    expect(empty.headers.get("content-type")).toStartWith("application/json");
+    expect(empty.headers.get("content-disposition")).toBe('attachment; filename="shelf.json"');
+    expect(await empty.text()).toBe("[]");
+
+    const first = { title: 'A <Shelf> & "Stories"', author: "Anne O'Writer" };
+    const second = { title: "Second Book", author: "Another Author" };
+    for (const book of [first, second]) {
+      const response = await fetch(`${base}/books`, {
+        method: "POST",
+        body: new URLSearchParams(book),
+        redirect: "manual",
+      });
+      expect(response.status).toBe(303);
+    }
+    await fetch(`${base}/books/1/toggle`, { method: "POST", redirect: "manual" });
+
+    const pageBody = await (await fetch(base)).text();
+    expect(pageBody.indexOf(second.title)).toBeLessThan(pageBody.indexOf("A &lt;Shelf&gt;"));
+
+    const inspection = new Database(dbPath, { readonly: true });
+    const schemaBefore = inspection
+      .query("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name")
+      .all();
+    const booksBefore = inspection.query("SELECT * FROM books ORDER BY id").all();
+
+    const response = await fetch(`${base}/books/export.json?filter=unread`);
+    const raw = await response.text();
+    expect(raw).toContain('<Shelf> & \\"Stories\\"');
+    const exported = JSON.parse(raw);
+    expect(exported).toEqual([
+      { id: 1, title: first.title, author: first.author, read: true },
+      { id: 2, title: second.title, author: second.author, read: false },
+    ]);
+    expect(Object.keys(exported[0])).toEqual(["id", "title", "author", "read"]);
+    expect(Object.keys(exported[1])).toEqual(["id", "title", "author", "read"]);
+
+    expect(
+      inspection.query("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name").all(),
+    ).toEqual(schemaBefore);
+    expect(inspection.query("SELECT * FROM books ORDER BY id").all()).toEqual(booksBefore);
+    inspection.close();
   });
 });
