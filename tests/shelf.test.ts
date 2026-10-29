@@ -35,8 +35,14 @@ describe("HTTP routes", () => {
       ),
     ];
     expect(skipLinks).toHaveLength(1);
-    const target = `<section id="${skipLinks[0]![1]}" tabindex="-1"><h2>Books</h2>`;
-    expect(body.split(target)).toHaveLength(2);
+    const targetId = decodeURIComponent(skipLinks[0]![1]!);
+    const renderedIds = [...body.matchAll(/\sid="([^"]+)"/g)].map(
+      (match) => match[1],
+    );
+    expect(renderedIds.filter((id) => id === targetId)).toHaveLength(1);
+    expect(body).toContain(
+      `<section id="${targetId}" tabindex="-1"><h2>Books</h2>`,
+    );
 
     response = await fetch(`${base}/books`, {
       method: "POST",
