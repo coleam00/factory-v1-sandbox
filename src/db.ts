@@ -2,6 +2,15 @@ import { Database } from "bun:sqlite";
 
 export type BookId = bigint;
 
+const minimumBookId = -(1n << 63n);
+const maximumBookId = (1n << 63n) - 1n;
+
+export function parseBookId(value: string): BookId | undefined {
+  if (!/^-?\d+$/.test(value)) return undefined;
+  const id = BigInt(value);
+  return id >= minimumBookId && id <= maximumBookId ? id : undefined;
+}
+
 export type Book = {
   id: BookId;
   title: string;

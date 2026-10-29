@@ -62,6 +62,70 @@ describe("HTTP routes", () => {
     expect(await invalid.text()).toContain("Title and author are required");
     expect((await fetch(`${base}/missing`)).status).toBe(404);
   });
+
+  test("handles the complete SQLite ID range in mutation routes", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "shelf-routes-"));
+    const dbPath = join(directory, "shelf.db");
+    const minimumId = -9_223_372_036_854_775_808n;
+    const maximumId = 9_223_372_036_854_775_807n;
+    const outOfRangeIds = [minimumId - 1n, maximumId + 1n];
+    const setup = openShelf(dbPath);
+    setup.close();
+
+    const seed = new Database(dbPath, { safeIntegers: true });
+    seed
+      .query("INSERT INTO books (id, title, author) VALUES (?, ?, ?)")
+      .run(minimumId, "Minimum", "Identifier");
+    seed
+      .query("INSERT INTO books (id, title, author) VALUES (?, ?, ?)")
+      .run(maximumId, "Maximum", "Identifier");
+    seed.close();
+
+    const signedApp = startServer({ port: 0, dbPath });
+    const signedBase = signedApp.server.url.origin;
+    try {
+      const body = await (await fetch(signedBase)).text();
+      expect(body).toContain(`/books/${minimumId}/toggle`);
+      expect(body).toContain(`/books/${maximumId}/delete`);
+
+      for (const id of outOfRangeIds) {
+        for (const action of ["toggle", "delete"]) {
+          const response = await fetch(`${signedBase}/books/${id}/${action}`, {
+            method: "POST",
+            redirect: "manual",
+          });
+          expect(response.status).toBe(303);
+        }
+      }
+
+      for (const id of [minimumId, maximumId]) {
+        let response = await fetch(`${signedBase}/books/${id}/toggle`, {
+          method: "POST",
+          redirect: "manual",
+        });
+        expect(response.status).toBe(303);
+
+        const inspection = new Database(dbPath, { readonly: true, safeIntegers: true });
+        expect(inspection.query("SELECT read FROM books WHERE id = ?").get(id)).toEqual({
+          read: 1n,
+        });
+        inspection.close();
+
+        response = await fetch(`${signedBase}/books/${id}/delete`, {
+          method: "POST",
+          redirect: "manual",
+        });
+        expect(response.status).toBe(303);
+      }
+
+      const inspection = new Database(dbPath, { readonly: true, safeIntegers: true });
+      expect(inspection.query("SELECT id FROM books").all()).toEqual([]);
+      inspection.close();
+    } finally {
+      signedApp.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("JSON export", () => {

@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { openShelf, type ExportedBook } from "./db";
+import { openShelf, parseBookId, type ExportedBook } from "./db";
 import { page } from "./views";
 
 const publicDir = join(import.meta.dir, "..", "public");
@@ -42,10 +42,12 @@ export function startServer(options: { port?: number; dbPath?: string } = {}) {
         return redirect();
       }
 
-      const match = url.pathname.match(/^\/books\/(\d+)\/(toggle|delete)$/);
+      const match = url.pathname.match(/^\/books\/(-?\d+)\/(toggle|delete)$/);
       if (request.method === "POST" && match) {
-        const id = BigInt(match[1]);
-        match[2] === "toggle" ? shelf.toggle(id) : shelf.remove(id);
+        const id = parseBookId(match[1]);
+        if (id !== undefined) {
+          match[2] === "toggle" ? shelf.toggle(id) : shelf.remove(id);
+        }
         return redirect();
       }
       return new Response("Not found", { status: 404 });
