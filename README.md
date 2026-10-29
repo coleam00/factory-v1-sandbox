@@ -13,7 +13,7 @@ bun run dev
 
 Open <http://localhost:3000>. Use `PORT` to choose another port and `SHELF_DB` to choose another database path (the default is `shelf.db`). For a non-watching process, run `bun start`.
 
-To back up the shelf, open <http://localhost:3000/books/export.json>; the complete reading list downloads as `shelf.json`.
+To back up the shelf, open `http://localhost:<port>/books/export.json`, using port 3000 by default or the `PORT` value you chose; the complete reading list downloads as `shelf.json`.
 
 ## Test
 
