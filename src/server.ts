@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { openShelf, parseBookId, type ExportedBook } from "./db";
+import { openShelf, parseBookId, type BookId, type ExportedBook } from "./db";
 import { page } from "./views";
 
 const publicDir = join(import.meta.dir, "..", "public");
@@ -16,6 +16,10 @@ const exportJson = (books: ExportedBook[]) =>
 
 export function startServer(options: { port?: number; dbPath?: string } = {}) {
   const shelf = openShelf(options.dbPath);
+  const mutationHandlers = new Map<string, (id: BookId) => boolean>([
+    ["toggle", (id) => shelf.toggle(id)],
+    ["delete", (id) => shelf.remove(id)],
+  ]);
   const server = Bun.serve({
     port: options.port ?? Number(process.env.PORT ?? 3000),
     async fetch(request) {
@@ -42,12 +46,12 @@ export function startServer(options: { port?: number; dbPath?: string } = {}) {
         return redirect();
       }
 
-      const match = url.pathname.match(/^\/books\/(-?\d+)\/(toggle|delete)$/);
+      const match = url.pathname.match(/^\/books\/(-?\d+)\/([^/]+)$/);
       if (request.method === "POST" && match) {
+        const handler = mutationHandlers.get(match[2]);
+        if (!handler) return new Response("Not found", { status: 404 });
         const id = parseBookId(match[1]);
-        if (id !== undefined) {
-          match[2] === "toggle" ? shelf.toggle(id) : shelf.remove(id);
-        }
+        if (id !== undefined) handler(id);
         return redirect();
       }
       return new Response("Not found", { status: 404 });

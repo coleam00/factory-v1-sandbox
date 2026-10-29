@@ -45,6 +45,13 @@ describe("HTTP routes", () => {
     expect(body).toContain("Kindred");
     expect(body).toContain("<b>0</b> of 1 read");
 
+    const unknownAction = await fetch(`${base}/books/1/archive`, {
+      method: "POST",
+      redirect: "manual",
+    });
+    expect(unknownAction.status).toBe(404);
+    expect(await (await fetch(base)).text()).toContain("Kindred");
+
     await fetch(`${base}/books/1/toggle`, { method: "POST" });
     body = await (await fetch(base)).text();
     expect(body).toContain("<b>1</b> of 1 read");
