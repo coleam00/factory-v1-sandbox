@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Book } from "../src/db";
+import { openShelf } from "../src/db";
 import { startServer } from "../src/server";
 import { page } from "../src/views";
 
@@ -138,7 +143,15 @@ function renderedMutationForm(html: string, operation: "toggle" | "delete") {
   return renderedForm(html, action);
 }
 
-function book(id: number, title: string, read = false): Book {
+function renderedBook(html: string, title: string) {
+  const titleIndex = html.indexOf(`<strong>${title}</strong>`);
+  if (titleIndex < 0) throw new Error(`Rendered page has no ${title} book`);
+  const start = html.lastIndexOf("<li", titleIndex);
+  const end = html.indexOf("</li>", titleIndex);
+  return html.slice(start, end + "</li>".length);
+}
+
+function book(id: bigint, title: string, read = false): Book {
   return { id, title, author: "Test Author", read, createdAt: "2026-01-01 00:00:00" };
 }
 
@@ -234,8 +247,8 @@ describe("browser shelf mutations", () => {
   });
 
   test("serializes overlapping add, toggle, and delete mutations", async () => {
-    const existing = book(1, "Kindred");
-    const added = book(2, "Submitted title");
+    const existing = book(1n, "Kindred");
+    const added = book(2n, "Submitted title");
     const initialPage = page([existing]);
     const toggleResponse = deferred<Response>();
     const addResponse = deferred<Response>();
@@ -266,7 +279,6 @@ describe("browser shelf mutations", () => {
 
     const toggleSubmission = client.submit(toggle);
     const addSubmission = client.submit(add);
-    const deleteSubmission = client.submit(remove);
     addForm.setValue("Title", "Edited after submit");
     addForm.setValue("Author", "Edited author");
 
@@ -282,6 +294,10 @@ describe("browser shelf mutations", () => {
         body: { title: "Submitted title", author: "Submitted author" },
       },
     ]);
+
+    const deleteSubmission = client.submit(remove);
+    await Promise.resolve();
+    expect(requests).toHaveLength(2);
     addResponse.resolve(new Response(page([added, { ...existing, read: true }])));
 
     await deleteDispatched.promise;
@@ -302,8 +318,66 @@ describe("browser shelf mutations", () => {
     expect(client.reloads()).toBe(0);
   });
 
+  test("preserves exact large IDs through rendered toggle and delete mutations", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "shelf-large-ids-"));
+    const dbPath = join(directory, "shelf.db");
+    const schema = openShelf(dbPath);
+    schema.close();
+    const seed = new Database(dbPath);
+    seed
+      .query("INSERT INTO books (id, title, author) VALUES (?, ?, ?)")
+      .run(9007199254740992n, "First adjacent ID", "Test Author");
+    seed
+      .query("INSERT INTO books (id, title, author) VALUES (?, ?, ?)")
+      .run(9007199254740993n, "Second adjacent ID", "Test Author");
+    seed.close();
+
+    const app = startServer({ port: 0, dbPath });
+    try {
+      const initialPage = await (await fetch(app.server.url)).text();
+      const requests: string[] = [];
+      const client = serverBackedClient(initialPage, app, requests);
+
+      expect(renderedBook(initialPage, "First adjacent ID")).toContain(
+        'action="/books/9007199254740992/toggle"',
+      );
+      expect(renderedBook(initialPage, "Second adjacent ID")).toContain(
+        'action="/books/9007199254740993/toggle"',
+      );
+
+      await client.submit(
+        new TestSubmitEvent(renderedForm(initialPage, "/books/9007199254740993/toggle")),
+      );
+
+      expect(requests).toEqual([`${origin}/books/9007199254740993/toggle`]);
+      expect(renderedBook(client.document.currentMain.markup, "First adjacent ID")).toStartWith(
+        '<li class="book">',
+      );
+      expect(renderedBook(client.document.currentMain.markup, "Second adjacent ID")).toStartWith(
+        '<li class="book is-read">',
+      );
+
+      await client.submit(
+        new TestSubmitEvent(
+          renderedForm(client.document.currentMain.markup, "/books/9007199254740993/delete"),
+        ),
+      );
+
+      expect(requests).toEqual([
+        `${origin}/books/9007199254740993/toggle`,
+        `${origin}/books/9007199254740993/delete`,
+      ]);
+      expect(client.document.currentMain.markup).toContain("First adjacent ID");
+      expect(client.document.currentMain.markup).not.toContain("Second adjacent ID");
+      expect(client.reloads()).toBe(0);
+    } finally {
+      app.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   test("confirms a rendered delete before submitting it", async () => {
-    const initialPage = page([book(1, "Kindred")]);
+    const initialPage = page([book(1n, "Kindred")]);
     let requests = 0;
     let confirmations = 0;
     const client = clientHarness(
@@ -387,7 +461,7 @@ describe("browser shelf mutations", () => {
   });
 
   test("reloads when a mutation response has no page content", async () => {
-    const initialPage = page([book(1, "Kindred")]);
+    const initialPage = page([book(1n, "Kindred")]);
     const client = clientHarness(initialPage, async () => new Response("Not a shelf page"));
 
     await client.submit(new TestSubmitEvent(renderedForm(initialPage, "/books/1/toggle")));

@@ -1,7 +1,9 @@
 import { Database } from "bun:sqlite";
 
+export type BookId = bigint;
+
 export type Book = {
-  id: number;
+  id: BookId;
   title: string;
   author: string;
   read: boolean;
@@ -9,7 +11,7 @@ export type Book = {
 };
 
 type BookRow = Omit<Book, "read" | "createdAt"> & {
-  read: number;
+  read: bigint;
   created_at: string;
 };
 
@@ -28,8 +30,12 @@ export function openShelf(path = process.env.SHELF_DB ?? "shelf.db") {
 
   const list = db.query<BookRow, []>(
     "SELECT id, title, author, read, created_at FROM books ORDER BY id DESC",
-  );
-  const insert = db.query("INSERT INTO books (title, author) VALUES (?, ?)");
+  ).safeIntegers(true);
+  const insert = db
+    .query<{ id: bigint }, [string, string]>(
+      "INSERT INTO books (title, author) VALUES (?, ?) RETURNING id",
+    )
+    .safeIntegers(true);
   const toggle = db.query(
     "UPDATE books SET read = CASE read WHEN 0 THEN 1 ELSE 0 END WHERE id = ?",
   );
@@ -44,12 +50,12 @@ export function openShelf(path = process.env.SHELF_DB ?? "shelf.db") {
       }));
     },
     add(title: string, author: string) {
-      return Number(insert.run(title.trim(), author.trim()).lastInsertRowid);
+      return insert.get(title.trim(), author.trim())!.id;
     },
-    toggle(id: number) {
+    toggle(id: BookId) {
       return toggle.run(id).changes === 1;
     },
-    remove(id: number) {
+    remove(id: BookId) {
       return remove.run(id).changes === 1;
     },
     close() {
