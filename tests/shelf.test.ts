@@ -35,16 +35,21 @@ describe("HTTP routes", () => {
       redirect: "manual",
     });
     expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("/");
 
     let body = await (await fetch(base)).text();
     expect(body).toContain("Kindred");
     expect(body).toContain("<b>0</b> of 1 read");
 
-    await fetch(`${base}/books/1/toggle`, { method: "POST" });
+    response = await fetch(`${base}/books/1/toggle`, { method: "POST", redirect: "manual" });
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("/");
     body = await (await fetch(base)).text();
     expect(body).toContain("<b>1</b> of 1 read");
 
-    await fetch(`${base}/books/1/delete`, { method: "POST" });
+    response = await fetch(`${base}/books/1/delete`, { method: "POST", redirect: "manual" });
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("/");
     expect(await (await fetch(base)).text()).toContain("<b>0</b> of 0 read");
   });
 
@@ -56,5 +61,92 @@ describe("HTTP routes", () => {
     expect(invalid.status).toBe(400);
     expect(await invalid.text()).toContain("Title and author are required");
     expect((await fetch(`${base}/missing`)).status).toBe(404);
+  });
+});
+
+describe("shelf view", () => {
+  test("filters, orders, and retains the active view through mutations", async () => {
+    const app = startServer({ port: 0, dbPath: ":memory:" });
+    const base = app.server.url.origin;
+    const activeView = "filter=unread&order=title";
+    const activeLocation = `/?${activeView}`;
+    const postBook = (title: string) =>
+      fetch(`${base}/books`, {
+        method: "POST",
+        body: new URLSearchParams({ title, author: `${title} author` }),
+        redirect: "manual",
+      });
+
+    try {
+      await postBook("Zebra");
+      await postBook("apple");
+      await postBook("Middle");
+
+      const defaultBody = await (await fetch(base)).text();
+      expect(defaultBody.indexOf("Middle")).toBeLessThan(defaultBody.indexOf("apple"));
+      expect(defaultBody.indexOf("apple")).toBeLessThan(defaultBody.indexOf("Zebra"));
+
+      const fallbackBody = await (
+        await fetch(`${base}/?filter=unsupported&order=unsupported&ignored=value`)
+      ).text();
+      expect(fallbackBody).toContain('<option value="all" selected>');
+      expect(fallbackBody).toContain('<option value="added" selected>');
+      expect(fallbackBody).not.toContain("ignored=value");
+
+      const titleBody = await (await fetch(`${base}/?order=title`)).text();
+      expect(titleBody.indexOf("apple")).toBeLessThan(titleBody.indexOf("Middle"));
+      expect(titleBody.indexOf("Middle")).toBeLessThan(titleBody.indexOf("Zebra"));
+
+      await fetch(`${base}/books/2/toggle`, { method: "POST" });
+      let activeBody = await (await fetch(`${base}/?${activeView}`)).text();
+      expect(activeBody).not.toContain("apple");
+      expect(activeBody).toContain('<option value="unread" selected>');
+      expect(activeBody).toContain('<option value="title" selected>');
+      expect(activeBody).toContain('action="/books?filter=unread&amp;order=title"');
+      expect(activeBody).toContain('action="/books/3/toggle?filter=unread&amp;order=title"');
+      expect(activeBody).toContain("<b>1</b> of 3 read");
+      expect(await (await fetch(`${base}/?${activeView}`)).text()).toBe(activeBody);
+
+      let response = await fetch(`${base}/books?${activeView}`, {
+        method: "POST",
+        body: new URLSearchParams({ title: "", author: "Nobody" }),
+      });
+      expect(response.status).toBe(400);
+      expect(await response.text()).toContain('action="/books?filter=unread&amp;order=title"');
+
+      response = await fetch(`${base}/books?${activeView}`, {
+        method: "POST",
+        body: new URLSearchParams({ title: "Beginning", author: "New author" }),
+        redirect: "manual",
+      });
+      expect(response.status).toBe(303);
+      expect(response.headers.get("location")).toBe(activeLocation);
+      activeBody = await (await fetch(new URL(activeLocation, base))).text();
+      expect(activeBody.indexOf("Beginning")).toBeLessThan(activeBody.indexOf("Middle"));
+
+      response = await fetch(`${base}/books/4/toggle?${activeView}`, {
+        method: "POST",
+        redirect: "manual",
+      });
+      expect(response.status).toBe(303);
+      expect(response.headers.get("location")).toBe(activeLocation);
+      activeBody = await (await fetch(new URL(activeLocation, base))).text();
+      expect(activeBody).not.toContain("Beginning");
+
+      response = await fetch(`${base}/books/3/delete?${activeView}`, {
+        method: "POST",
+        redirect: "manual",
+      });
+      expect(response.status).toBe(303);
+      expect(response.headers.get("location")).toBe(activeLocation);
+      activeBody = await (await fetch(new URL(activeLocation, base))).text();
+      expect(activeBody).not.toContain("Middle");
+
+      await fetch(`${base}/books/1/toggle`, { method: "POST" });
+      expect(await (await fetch(`${base}/?filter=unread`)).text()).toContain("No unread books.");
+      expect(await (await fetch(`${base}/?filter=all`)).text()).toContain("Zebra");
+    } finally {
+      app.close();
+    }
   });
 });
