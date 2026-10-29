@@ -48,6 +48,15 @@ describe("database", () => {
     expect(db.list()).toEqual([]);
     db.close();
   });
+
+  test("rejects titles that are empty after normalization", () => {
+    const db = openShelf(":memory:");
+    for (const title of ["", "   "]) {
+      expect(() => db.add(title, "Nobody")).toThrow("Title is required.");
+    }
+    expect(db.list()).toEqual([]);
+    db.close();
+  });
 });
 
 describe("HTTP routes", () => {

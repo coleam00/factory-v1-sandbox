@@ -44,7 +44,9 @@ export function openShelf(path = process.env.SHELF_DB ?? "shelf.db") {
       }));
     },
     add(title: string, author: string) {
-      return Number(insert.run(title.trim(), author.trim()).lastInsertRowid);
+      const normalizedTitle = title.trim();
+      if (!normalizedTitle) throw new Error("Title is required.");
+      return Number(insert.run(normalizedTitle, author.trim()).lastInsertRowid);
     },
     toggle(id: number) {
       return toggle.run(id).changes === 1;
