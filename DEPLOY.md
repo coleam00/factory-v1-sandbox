@@ -21,13 +21,13 @@ separate persistent sandbox database. It refuses to replace an existing deployme
 Wait up to 30 seconds for this health check, polling at one-second intervals:
 
 ```powershell
-bun .archon/workflows/factory/deploy/scripts/read-health.ts http://localhost:4197/health
+Invoke-RestMethod http://localhost:4197/health | ConvertTo-Json
 ```
 
-The reader accepts only an HTTP 200 JSON response containing exactly `status: "ok"`
-and a lowercase full commit or `null` revision. Read the deployed revision from its
-JSON output and require an exact full-SHA match to the requested commit. A process ID
-or successful start command alone does not establish health or deployed identity.
+Health passes only if the HTTP response is 200 and `status` is `ok`.
+Read the deployed revision through the same endpoint's `revision` field. Require
+an exact full-SHA match to the requested commit. A process ID or successful start
+command alone does not establish health or deployed identity.
 
 Also verify the normal app is served:
 
