@@ -14,7 +14,8 @@ export const viewFields = {
       added: {
         label: "Recently added",
         compare: (left: Book, right: Book) =>
-          right.createdAt.localeCompare(left.createdAt) || right.id - left.id,
+          right.createdAt.localeCompare(left.createdAt) ||
+          (right.id === left.id ? 0 : right.id > left.id ? 1 : -1),
       },
       title: {
         label: "Title A-Z",
@@ -22,7 +23,7 @@ export const viewFields = {
           const byTitle = left.title.localeCompare(right.title, undefined, {
             sensitivity: "base",
           });
-          return byTitle || right.id - left.id;
+          return byTitle || (right.id === left.id ? 0 : right.id > left.id ? 1 : -1);
         },
       },
     },
