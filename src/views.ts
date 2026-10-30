@@ -6,6 +6,8 @@ import {
   type ViewState,
 } from "./view-state";
 
+const booksSectionId = "books";
+
 const escapeHtml = (value: string) =>
   value.replace(/[&<>"']/g, (char) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
@@ -53,7 +55,7 @@ export function page(
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Shelf</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
-<body><main>
+<body><a class="skip-link" href="#${booksSectionId}">Skip to books</a><main>
   <header><div><h1>Shelf</h1><p>Your personal reading list</p></div><div class="count"><b>${read}</b> of ${books.length} read</div></header>
   <form class="add" method="post" action="/books${query}">
     <label>Title<input name="title" required maxlength="200" placeholder="The Left Hand of Darkness"></label>
@@ -61,7 +63,7 @@ export function page(
     <button>Add book</button>
   </form>
   ${error ? `<p class="error" role="alert">${escapeHtml(error)}</p>` : ""}
-  <section><div class="shelf-heading"><h2>Books</h2>
+  <section id="${booksSectionId}" tabindex="-1"><div class="shelf-heading"><h2>Books</h2>
     <form class="view-controls" method="get" action="/">
       <label>Show<select name="filter">
         ${optionTags(viewFields.filter.options, view.filter)}
