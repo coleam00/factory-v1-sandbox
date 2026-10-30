@@ -39,7 +39,7 @@ export function page(
     .map(
       (book) => `<li class="book${book.read ? " is-read" : ""}">
         <form method="post" action="${mutationPath(book.id, mutationActions.toggle)}${query}">
-          <button class="check" aria-label="Mark ${book.read ? "unread" : "read"}">${book.read ? "✓" : ""}</button>
+          <button class="check" aria-label="Mark ${escapeHtml(book.title)} as ${book.read ? "unread" : "read"} (book ${book.id})">${book.read ? "✓" : ""}</button>
         </form>
         <div><strong>${escapeHtml(book.title)}</strong><span>${escapeHtml(book.author)}</span></div>
         <form method="post" action="${mutationPath(book.id, mutationActions.delete)}${query}" class="delete-form">
