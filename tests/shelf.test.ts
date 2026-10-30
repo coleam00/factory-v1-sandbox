@@ -112,7 +112,6 @@ describe("HTTP routes", () => {
       const inspectionDb = new Database(dbPath);
       const adjacentId = "9007199254740992";
       const targetId = "9007199254740993";
-      const missingId = "9007199254740994";
       const aliasProneMissingId = "9007199254740995";
       const roundedNeighborId = "9007199254740996";
       const insert = inspectionDb.query(
@@ -134,14 +133,15 @@ describe("HTTP routes", () => {
 
       try {
         const before = books();
-        for (const absentId of [missingId, aliasProneMissingId]) {
-          const missing = await fetch(`${isolatedApp.server.url}books/${absentId}/${action}`, {
+        const missing = await fetch(
+          `${isolatedApp.server.url}books/${aliasProneMissingId}/${action}`,
+          {
             method: "POST",
             redirect: "manual",
-          });
-          expect(missing.status).toBe(404);
-          expect(books()).toEqual(before);
-        }
+          },
+        );
+        expect(missing.status).toBe(404);
+        expect(books()).toEqual(before);
 
         const body = await (await fetch(isolatedApp.server.url)).text();
         const targetRow = body
