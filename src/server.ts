@@ -1,9 +1,11 @@
 import { join } from "node:path";
-import { openShelf, parseBookId, type BookId, type ExportedBook } from "./db";
+import { openShelf, parseBookId, type ExportedBook } from "./db";
 import {
+  assertMutationHandlers,
   isMutationAction,
   mutationActions,
   type MutationAction,
+  type MutationHandler,
 } from "./mutation-routes";
 import { parseView, viewLocation } from "./view-state";
 import { page } from "./views";
@@ -22,10 +24,11 @@ const parseRevision = (value: string | undefined) =>
 export function startServer(options: { port?: number; dbPath?: string } = {}) {
   const revision = parseRevision(process.env.APP_REVISION);
   const shelf = openShelf(options.dbPath);
-  const mutationHandlers: Record<MutationAction, (id: BookId) => boolean> = {
+  const mutationHandlers: Record<MutationAction, MutationHandler> = {
     [mutationActions.toggle]: (id) => shelf.toggle(id),
     [mutationActions.delete]: (id) => shelf.remove(id),
   };
+  assertMutationHandlers(mutationHandlers);
   const server = Bun.serve({
     port: options.port ?? Number(process.env.PORT ?? 3000),
     async fetch(request) {

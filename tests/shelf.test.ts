@@ -4,9 +4,24 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openShelf } from "../src/db";
+import { assertMutationHandlers } from "../src/mutation-routes";
 import { startServer } from "../src/server";
 
 const originalRevision = process.env.APP_REVISION;
+
+describe("mutation handler contract", () => {
+  const handler = () => true;
+
+  test.each([
+    ["a missing action", { toggle: handler }],
+    ["an extra action", { toggle: handler, delete: handler, flip: handler }],
+    ["a non-callable handler", { toggle: handler, delete: "delete" }],
+  ])("rejects %s", (_case, handlers) => {
+    expect(() => assertMutationHandlers(handlers)).toThrow(
+      "Mutation handlers must exactly match mutation actions",
+    );
+  });
+});
 
 function startWithRevision(revision?: string) {
   if (revision === undefined) delete process.env.APP_REVISION;
@@ -223,14 +238,18 @@ describe("HTTP routes", () => {
       expect(titleBody).toContain(`/books/${minimumId}/toggle`);
       expect(titleBody).toContain(`/books/${maximumId}/delete`);
 
+      const activeView = "filter=all&order=title";
       for (const id of outOfRangeIds) {
         for (const action of ["toggle", "delete"]) {
-          const response = await fetch(`${signedBase}/books/${id}/${action}`, {
-            method: "POST",
-            redirect: "manual",
-          });
+          const response = await fetch(
+            `${signedBase}/books/${id}/${action}?${activeView}`,
+            { method: "POST", redirect: "manual" },
+          );
           expect(response.status).toBe(404);
-          expect(await response.text()).toContain("Book not found.");
+          const errorBody = await response.text();
+          expect(errorBody).toContain("Book not found.");
+          expect(errorBody).toContain('<option value="all" selected>');
+          expect(errorBody).toContain('<option value="title" selected>');
         }
       }
 
