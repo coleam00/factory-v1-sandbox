@@ -295,82 +295,6 @@ describe("HTTP routes", () => {
         rmSync(directory, { recursive: true, force: true });
       }
     });
-
-    test(`${action} preserves exact numeric IDs and reports missing books`, async () => {
-      const directory = mkdtempSync(join(tmpdir(), "shelf-test-"));
-      const dbPath = join(directory, "shelf.db");
-      const isolatedApp = startServer({ port: 0, dbPath });
-      const inspectionDb = new Database(dbPath);
-      const adjacentId = "9007199254740992";
-      const targetId = "9007199254740993";
-      const aliasProneMissingId = "9007199254740995";
-      const roundedNeighborId = "9007199254740996";
-      const insert = inspectionDb.query(
-        "INSERT INTO books (id, title, author) VALUES (?, ?, ?)",
-      );
-      insert.run(1, "Control", "Still Here");
-      insert.run(BigInt(adjacentId), "Adjacent", "Must Not Change");
-      insert.run(BigInt(targetId), "Target", "Exact ID");
-      insert.run(BigInt(roundedNeighborId), "Rounded neighbor", "Must Not Change");
-      const books = () =>
-        inspectionDb
-          .query<
-            { id: string; title: string; author: string; read: number; created_at: string },
-            []
-          >(
-            "SELECT CAST(id AS TEXT) AS id, title, author, read, created_at FROM books ORDER BY id",
-          )
-          .all();
-
-      try {
-        const before = books();
-        const missing = await fetch(
-          `${isolatedApp.server.url}books/${aliasProneMissingId}/${action}`,
-          {
-            method: "POST",
-            redirect: "manual",
-          },
-        );
-        expect(missing.status).toBe(404);
-        expect(books()).toEqual(before);
-
-        const body = await (await fetch(isolatedApp.server.url)).text();
-        const targetRow = body
-          .match(/<li class="book[^>]*>[\s\S]*?<\/li>/g)
-          ?.find((row) => row.includes("<strong>Target</strong>"));
-        const targetAction = targetRow?.match(
-          new RegExp(`action="([^"]+/${action}[^"]*)"`),
-        )?.[1];
-        expect(targetAction).toBe(
-          `/books/${targetId}/${action}?filter=all&amp;order=added`,
-        );
-        if (!targetAction) throw new Error("Target form action is missing");
-
-        const existing = await fetch(
-          new URL(targetAction.replaceAll("&amp;", "&"), isolatedApp.server.url),
-          {
-            method: "POST",
-            redirect: "manual",
-          },
-        );
-        expect(existing.status).toBe(303);
-
-        if (action === "toggle") {
-          expect(books()).toEqual([
-            before[0],
-            before[1],
-            { ...before[2], read: 1 },
-            before[3],
-          ]);
-        } else {
-          expect(books()).toEqual([before[0], before[1], before[3]]);
-        }
-      } finally {
-        inspectionDb.close();
-        isolatedApp.close();
-        rmSync(directory, { recursive: true, force: true });
-      }
-    });
   }
 
   test("returns 404 for mutation requests with ids outside SQLite's range", async () => {
@@ -480,11 +404,13 @@ describe("HTTP routes", () => {
     }
   });
 
-  test("preserves adjacent 64-bit book ids through rendering and mutations", async () => {
+  test("preserves exact 64-bit book ids through missing and successful mutations", async () => {
     const directory = mkdtempSync(join(tmpdir(), "shelf-book-id-"));
     const dbPath = join(directory, "shelf.db");
     const firstId = 9007199254740992n;
     const secondId = 9007199254740993n;
+    const aliasProneMissingId = 9007199254740995n;
+    const roundedNeighborId = 9007199254740996n;
     const shelf = openShelf(dbPath);
     shelf.close();
 
@@ -505,10 +431,37 @@ describe("HTTP routes", () => {
       exactShelf.close();
     }
 
+    const inspectionDb = new Database(dbPath);
+    inspectionDb
+      .query("INSERT INTO books (id, title, author) VALUES (?, ?, ?)")
+      .run(roundedNeighborId, "Rounded Neighbor", "Must Not Change");
+
     const boundaryApp = startServer({ port: 0, dbPath });
     const boundaryBase = boundaryApp.server.url.origin;
+    const books = () =>
+      inspectionDb
+        .query<
+          { id: string; title: string; author: string; read: number; created_at: string },
+          []
+        >(
+          "SELECT CAST(id AS TEXT) AS id, title, author, read, created_at FROM books ORDER BY id",
+        )
+        .all();
 
     try {
+      const beforeMissingMutations = books();
+      for (const action of mutationActions) {
+        const response = await fetch(
+          `${boundaryBase}/books/${aliasProneMissingId}/${action}`,
+          {
+            method: "POST",
+            redirect: "manual",
+          },
+        );
+        expect(response.status).toBe(404);
+        expect(books()).toEqual(beforeMissingMutations);
+      }
+
       let body = await (await fetch(boundaryBase)).text();
       const firstName = ariaLabel(toggleForm(body, firstId));
       const secondName = ariaLabel(toggleForm(body, secondId));
@@ -536,6 +489,7 @@ describe("HTTP routes", () => {
       expect(body).not.toContain(`/books/${secondId}/toggle`);
       expect(ariaLabel(toggleForm(body, firstId))).toContain(" as read ");
     } finally {
+      inspectionDb.close();
       boundaryApp.close();
       rmSync(directory, { recursive: true, force: true });
     }
