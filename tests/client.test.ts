@@ -570,7 +570,9 @@ describe("browser shelf mutations", () => {
       expect(client.reloads()).toBe(0);
       expect(client.document.currentMain.markup).toContain('class="book is-read"');
       expect(client.document.currentMain.markup).toContain('<b>1</b> of 1 read');
-      expect(client.document.currentMain.markup).toContain('aria-label="Mark unread"');
+      expect(client.document.currentMain.markup).toContain(
+        'aria-label="Mark Kindred as unread (book 1)"',
+      );
       expect(client.document.currentMain.markup).toContain('<option value="title" selected>');
     } finally {
       app.close();

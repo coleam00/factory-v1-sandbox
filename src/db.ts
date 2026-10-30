@@ -24,7 +24,7 @@ type BookRow = Omit<Book, "read" | "createdAt"> & {
 };
 
 export function openShelf(path = process.env.SHELF_DB ?? "shelf.db") {
-  const db = new Database(path, { create: true });
+  const db = new Database(path, { create: true, safeIntegers: true });
   db.exec(`
     PRAGMA journal_mode = WAL;
     CREATE TABLE IF NOT EXISTS books (
@@ -38,12 +38,10 @@ export function openShelf(path = process.env.SHELF_DB ?? "shelf.db") {
 
   const list = db.query<BookRow, []>(
     "SELECT id, title, author, read, created_at FROM books ORDER BY id DESC",
-  ).safeIntegers(true);
-  const insert = db
-    .query<{ id: BookId }, [string, string]>(
-      "INSERT INTO books (title, author) VALUES (?, ?) RETURNING id",
-    )
-    .safeIntegers(true);
+  );
+  const insert = db.query<{ id: BookId }, [string, string]>(
+    "INSERT INTO books (title, author) VALUES (?, ?) RETURNING id",
+  );
   const toggle = db.query(
     "UPDATE books SET read = CASE read WHEN 0 THEN 1 ELSE 0 END WHERE id = ?",
   );

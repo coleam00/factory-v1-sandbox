@@ -1,6 +1,63 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { bookId, openShelf } from "../src/db";
 import { startServer } from "../src/server";
+import { page } from "../src/views";
+
+const toggleForm = (body: string, bookId: bigint) => {
+  const form = body.match(
+    new RegExp(
+      `<form\\b(?=[^>]*\\baction="/books/${bookId}/toggle(?:\\?[^\"]*)?")[^>]*>[\\s\\S]*?</form>`,
+    ),
+  )?.[0];
+  if (!form) throw new Error(`Missing toggle form for book ${bookId}`);
+  return form;
+};
+
+const ariaLabel = (element: string) => {
+  const label = element.match(/\baria-label="([^"]*)"/)?.[1];
+  if (!label) throw new Error("Missing aria-label");
+  return label;
+};
+
+describe("page", () => {
+  test("names each read toggle for its book and next action", () => {
+    const body = page([
+      {
+        id: bookId(1n)!,
+        title: "Dune",
+        author: "Frank Herbert",
+        read: false,
+        createdAt: "2026-10-29 00:00:00",
+      },
+      {
+        id: bookId(2n)!,
+        title: 'A "Book" & <More>',
+        author: "Another Author",
+        read: true,
+        createdAt: "2026-10-29 00:00:00",
+      },
+      {
+        id: bookId(3n)!,
+        title: "The Left Hand of Darkness",
+        author: "Ursula K. Le Guin",
+        read: false,
+        createdAt: "2026-10-29 00:00:00",
+      },
+    ], { filter: "all", order: "added" });
+
+    expect(toggleForm(body, 1n)).toContain('aria-label="Mark Dune as read (book 1)"');
+    expect(toggleForm(body, 2n)).toContain(
+      'aria-label="Mark A &quot;Book&quot; &amp; &lt;More&gt; as unread (book 2)"',
+    );
+    expect(toggleForm(body, 3n)).toContain(
+      'aria-label="Mark The Left Hand of Darkness as read (book 3)"',
+    );
+  });
+});
 
 function expectEmptyShelf(html: string) {
   const contents = html.match(/<div class="empty">([\s\S]*?)<\/div>/)?.[1];
@@ -163,14 +220,15 @@ describe("HTTP routes", () => {
 
     response = await fetch(`${base}/books`, {
       method: "POST",
-      body: new URLSearchParams({ title: "Kindred", author: "Octavia E. Butler" }),
+      body: new URLSearchParams({ title: "Dune", author: "Frank Herbert" }),
       redirect: "manual",
     });
     expect(response.status).toBe(303);
     expect(response.headers.get("location")).toBe("/");
 
     body = await (await fetch(base)).text();
-    expect(body).toContain("Kindred");
+    expect(body).toContain("Dune");
+    expect(body).toContain('aria-label="Mark Dune as read (book 1)"');
     expect(body).toContain("<b>0</b> of 1 read");
 
     response = await fetch(`${base}/books/1/toggle`, { method: "POST", redirect: "manual" });
@@ -178,6 +236,7 @@ describe("HTTP routes", () => {
     expect(response.headers.get("location")).toBe("/");
     body = await (await fetch(base)).text();
     expect(body).toContain("<b>1</b> of 1 read");
+    expect(body).toContain('aria-label="Mark Dune as unread (book 1)"');
 
     response = await fetch(`${base}/books/1/delete`, { method: "POST", redirect: "manual" });
     expect(response.status).toBe(303);
@@ -193,6 +252,58 @@ describe("HTTP routes", () => {
     expect(invalid.status).toBe(400);
     expect(await invalid.text()).toContain("Title and author are required");
     expect((await fetch(`${base}/missing`)).status).toBe(404);
+  });
+
+  test("returns 404 for mutation requests with ids outside SQLite's range", async () => {
+    const firstExcludedId = 9223372036854775808n;
+
+    for (const action of ["toggle", "delete"] as const) {
+      const response = await fetch(`${base}/books/${firstExcludedId}/${action}`, {
+        method: "POST",
+        redirect: "manual",
+      });
+      expect(response.status).toBe(404);
+      expect(await response.text()).toContain("Book not found.");
+    }
+
+    expect((await fetch(base)).status).toBe(200);
+  });
+
+  test("toggles a book at SQLite's maximum id", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "shelf-maximum-book-id-"));
+    const dbPath = join(directory, "shelf.db");
+    const maximumId = 9223372036854775807n;
+    const shelf = openShelf(dbPath);
+    shelf.close();
+
+    const seed = new Database(dbPath, { safeIntegers: true });
+    seed.query("INSERT INTO books (id, title, author) VALUES (?, ?, ?)")
+      .run(maximumId, "Maximum Book", "Boundary Author");
+    seed.close();
+
+    const maximumIdApp = startServer({ port: 0, dbPath });
+    const maximumIdBase = maximumIdApp.server.url.origin;
+
+    try {
+      let body = await (await fetch(maximumIdBase)).text();
+      expect(ariaLabel(toggleForm(body, maximumId))).toBe(
+        `Mark Maximum Book as read (book ${maximumId})`,
+      );
+
+      const response = await fetch(`${maximumIdBase}/books/${maximumId}/toggle`, {
+        method: "POST",
+        redirect: "manual",
+      });
+      expect(response.status).toBe(303);
+
+      body = await (await fetch(maximumIdBase)).text();
+      expect(ariaLabel(toggleForm(body, maximumId))).toBe(
+        `Mark Maximum Book as unread (book ${maximumId})`,
+      );
+    } finally {
+      maximumIdApp.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   test("returns 404 without changing the shelf when a book is missing", async () => {
@@ -222,6 +333,92 @@ describe("HTTP routes", () => {
       }
     } finally {
       app.close();
+    }
+  });
+
+  test("keeps whitespace-distinct book toggle names distinguishable", async () => {
+    const whitespaceApp = startServer({ port: 0, dbPath: ":memory:" });
+    const whitespaceBase = whitespaceApp.server.url.origin;
+
+    try {
+      for (const title of ["A B", "A  B"]) {
+        const response = await fetch(`${whitespaceBase}/books`, {
+          method: "POST",
+          body: new URLSearchParams({ title, author: "An Author" }),
+          redirect: "manual",
+        });
+        expect(response.status).toBe(303);
+      }
+
+      const body = await (await fetch(whitespaceBase)).text();
+      const firstName = ariaLabel(toggleForm(body, 1n));
+      const secondName = ariaLabel(toggleForm(body, 2n));
+      expect(firstName).toBe("Mark A B as read (book 1)");
+      expect(secondName).toBe("Mark A  B as read (book 2)");
+      expect(firstName.replace(/\s+/g, " ")).not.toBe(secondName.replace(/\s+/g, " "));
+    } finally {
+      whitespaceApp.close();
+    }
+  });
+
+  test("preserves adjacent 64-bit book ids through rendering and mutations", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "shelf-book-id-"));
+    const dbPath = join(directory, "shelf.db");
+    const firstId = 9007199254740992n;
+    const secondId = 9007199254740993n;
+    const shelf = openShelf(dbPath);
+    shelf.close();
+
+    const seed = new Database(dbPath, { safeIntegers: true });
+    const insert = seed.query(
+      "INSERT INTO books (id, title, author) VALUES (?, ?, ?)",
+    );
+    insert.run(firstId, "A B", "First Author");
+    insert.run(secondId, "A  B", "Second Author");
+    seed.close();
+
+    const exactShelf = openShelf(dbPath);
+    try {
+      const addedId = exactShelf.add("Next Book", "Third Author");
+      expect(addedId).toBe(9007199254740994n);
+      expect(exactShelf.remove(addedId)).toBe(true);
+    } finally {
+      exactShelf.close();
+    }
+
+    const boundaryApp = startServer({ port: 0, dbPath });
+    const boundaryBase = boundaryApp.server.url.origin;
+
+    try {
+      let body = await (await fetch(boundaryBase)).text();
+      const firstName = ariaLabel(toggleForm(body, firstId));
+      const secondName = ariaLabel(toggleForm(body, secondId));
+      expect(firstName).toBe(
+        "Mark A B as read (book 9007199254740992)",
+      );
+      expect(secondName).toBe(
+        "Mark A  B as read (book 9007199254740993)",
+      );
+      expect(firstName.replace(/\s+/g, " ")).not.toBe(secondName.replace(/\s+/g, " "));
+      expect(body).toContain(`/books/${firstId}/delete`);
+      expect(body).toContain(`/books/${secondId}/delete`);
+
+      await fetch(`${boundaryBase}/books/${secondId}/toggle`, { method: "POST" });
+      body = await (await fetch(boundaryBase)).text();
+      expect(ariaLabel(toggleForm(body, firstId))).toContain(" as read ");
+      expect(ariaLabel(toggleForm(body, secondId))).toContain(" as unread ");
+
+      const deleteResponse = await fetch(`${boundaryBase}/books/${secondId}/delete`, {
+        method: "POST",
+        redirect: "manual",
+      });
+      expect(deleteResponse.status).toBe(303);
+      body = await (await fetch(boundaryBase)).text();
+      expect(body).not.toContain(`/books/${secondId}/toggle`);
+      expect(ariaLabel(toggleForm(body, firstId))).toContain(" as read ");
+    } finally {
+      boundaryApp.close();
+      rmSync(directory, { recursive: true, force: true });
     }
   });
 });

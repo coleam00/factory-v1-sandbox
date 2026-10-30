@@ -41,7 +41,7 @@ export function startServer(options: { port?: number; dbPath?: string } = {}) {
       if (request.method === "POST" && match) {
         const id = bookId(BigInt(match[1]));
         if (id === null) {
-          return new Response("Not found", { status: 404 });
+          return html(page(shelf.list(), view, "Book not found."), 404);
         }
         const changed = match[2] === "toggle" ? shelf.toggle(id) : shelf.remove(id);
         if (!changed) return html(page(shelf.list(), view, "Book not found."), 404);
