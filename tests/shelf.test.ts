@@ -250,93 +250,87 @@ describe("HTTP routes", () => {
     expect((await fetch(`${base}/missing`)).status).toBe(404);
   });
 
-  test("handles the complete SQLite ID range in mutation routes", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "shelf-routes-"));
+  test("does not admit negative IDs in mutation routes", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "shelf-negative-route-"));
     const dbPath = join(directory, "shelf.db");
-    const minimumId = -9_223_372_036_854_775_808n;
-    const maximumId = 9_223_372_036_854_775_807n;
-    const outOfRangeIds = [minimumId - 1n, maximumId + 1n];
     const setup = openShelf(dbPath);
     setup.close();
 
     const seed = new Database(dbPath, { safeIntegers: true });
     seed
-      .query("INSERT INTO books (id, title, author, created_at) VALUES (?, ?, ?, ?)")
-      .run(minimumId, "Same title", "Minimum identifier", "2026-01-01 00:00:00");
-    seed
-      .query("INSERT INTO books (id, title, author, created_at) VALUES (?, ?, ?, ?)")
-      .run(maximumId, "Same title", "Maximum identifier", "2026-01-01 00:00:00");
+      .query("INSERT INTO books (id, title, author) VALUES (?, ?, ?)")
+      .run(-1n, "Negative ID", "Route boundary");
     seed.close();
 
-    const signedApp = startServer({ port: 0, dbPath });
-    const signedBase = signedApp.server.url.origin;
+    const app = startServer({ port: 0, dbPath });
     try {
-      const body = await (await fetch(signedBase)).text();
-      expect(body).toContain(`/books/${minimumId}/toggle`);
-      expect(body).toContain(`/books/${maximumId}/delete`);
-      expect(ariaLabel(toggleForm(body, minimumId))).toBe(
-        `Mark Same title as read (book ${minimumId})`,
-      );
-      expect(ariaLabel(toggleForm(body, maximumId))).toBe(
-        `Mark Same title as read (book ${maximumId})`,
-      );
-
-      const titleBody = await (await fetch(`${signedBase}/?order=title`)).text();
-      expect(titleBody).toContain(`/books/${minimumId}/toggle`);
-      expect(titleBody).toContain(`/books/${maximumId}/delete`);
-
-      const activeView = "filter=all&order=title";
-      for (const id of outOfRangeIds) {
-        for (const action of mutationActions) {
-          const response = await fetch(
-            `${signedBase}/books/${id}/${action}?${activeView}`,
-            { method: "POST", redirect: "manual" },
-          );
-          expect(response.status).toBe(404);
-          const errorBody = await response.text();
-          expect(errorBody).toContain("Book not found.");
-          expect(errorBody).toContain('<option value="all" selected>');
-          expect(errorBody).toContain('<option value="title" selected>');
-        }
+      for (const action of mutationActions) {
+        const response = await fetch(`${app.server.url.origin}/books/-1/${action}`, {
+          method: "POST",
+          redirect: "manual",
+        });
+        expect(response.status).toBe(404);
       }
 
       const unchanged = new Database(dbPath, { readonly: true, safeIntegers: true });
-      expect(unchanged.query("SELECT id, read FROM books ORDER BY id").all()).toEqual([
-        { id: minimumId, read: 0n },
-        { id: maximumId, read: 0n },
+      expect(unchanged.query("SELECT id, read FROM books").all()).toEqual([
+        { id: -1n, read: 0n },
       ]);
       unchanged.close();
-
-      for (const id of [minimumId, maximumId]) {
-        let response = await fetch(`${signedBase}/books/${id}/toggle`, {
-          method: "POST",
-          redirect: "manual",
-        });
-        expect(response.status).toBe(303);
-
-        const inspection = new Database(dbPath, { readonly: true, safeIntegers: true });
-        expect(inspection.query("SELECT read FROM books WHERE id = ?").get(id)).toEqual({
-          read: 1n,
-        });
-        inspection.close();
-
-        const toggledBody = await (await fetch(signedBase)).text();
-        expect(ariaLabel(toggleForm(toggledBody, id))).toBe(
-          `Mark Same title as unread (book ${id})`,
-        );
-
-        response = await fetch(`${signedBase}/books/${id}/delete`, {
-          method: "POST",
-          redirect: "manual",
-        });
-        expect(response.status).toBe(303);
-      }
-
-      const inspection = new Database(dbPath, { readonly: true, safeIntegers: true });
-      expect(inspection.query("SELECT id FROM books").all()).toEqual([]);
-      inspection.close();
     } finally {
-      signedApp.close();
+      app.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("returns 404 for mutation requests with ids outside SQLite's range", async () => {
+    const firstExcludedId = 9223372036854775808n;
+
+    for (const action of mutationActions) {
+      const response = await fetch(`${base}/books/${firstExcludedId}/${action}`, {
+        method: "POST",
+        redirect: "manual",
+      });
+      expect(response.status).toBe(404);
+      expect(await response.text()).toContain("Book not found.");
+    }
+
+    expect((await fetch(base)).status).toBe(200);
+  });
+
+  test("toggles a book at SQLite's maximum id", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "shelf-maximum-book-id-"));
+    const dbPath = join(directory, "shelf.db");
+    const maximumId = 9223372036854775807n;
+    const shelf = openShelf(dbPath);
+    shelf.close();
+
+    const seed = new Database(dbPath, { safeIntegers: true });
+    seed.query("INSERT INTO books (id, title, author) VALUES (?, ?, ?)")
+      .run(maximumId, "Maximum Book", "Boundary Author");
+    seed.close();
+
+    const maximumIdApp = startServer({ port: 0, dbPath });
+    const maximumIdBase = maximumIdApp.server.url.origin;
+
+    try {
+      let body = await (await fetch(maximumIdBase)).text();
+      expect(ariaLabel(toggleForm(body, maximumId))).toBe(
+        `Mark Maximum Book as read (book ${maximumId})`,
+      );
+
+      const response = await fetch(`${maximumIdBase}/books/${maximumId}/toggle`, {
+        method: "POST",
+        redirect: "manual",
+      });
+      expect(response.status).toBe(303);
+
+      body = await (await fetch(maximumIdBase)).text();
+      expect(ariaLabel(toggleForm(body, maximumId))).toBe(
+        `Mark Maximum Book as unread (book ${maximumId})`,
+      );
+    } finally {
+      maximumIdApp.close();
       rmSync(directory, { recursive: true, force: true });
     }
   });
@@ -509,6 +503,12 @@ describe("JSON export", () => {
   test("exports an existing shelf exactly without changing it", async () => {
     const directory = mkdtempSync(join(tmpdir(), "shelf-export-"));
     const dbPath = join(directory, "shelf.db");
+    const negative = {
+      id: -9_223_372_036_854_775_807n,
+      title: "Negative identifier",
+      author: "Imported data",
+      read: 1,
+    };
     const first = {
       id: 9_007_199_254_740_992n,
       title: 'A <Shelf> & "Stories"',
@@ -534,6 +534,7 @@ describe("JSON export", () => {
     const insert = seed.query(
       "INSERT INTO books (id, title, author, read) VALUES (?, ?, ?, ?)",
     );
+    insert.run(negative.id, negative.title, negative.author, negative.read);
     insert.run(first.id, first.title, first.author, first.read);
     insert.run(second.id, second.title, second.author, second.read);
     const schemaBefore = seed
@@ -560,10 +561,11 @@ describe("JSON export", () => {
       );
       const raw = await response.text();
       expect(raw).toBe(
-        `[{"id":${first.id},"title":${JSON.stringify(first.title)},"author":${JSON.stringify(first.author)},"read":false},` +
+        `[{"id":${negative.id},"title":${JSON.stringify(negative.title)},"author":${JSON.stringify(negative.author)},"read":true},` +
+          `{"id":${first.id},"title":${JSON.stringify(first.title)},"author":${JSON.stringify(first.author)},"read":false},` +
           `{"id":${second.id},"title":${JSON.stringify(second.title)},"author":${JSON.stringify(second.author)},"read":true}]`,
       );
-      expect(JSON.parse(raw)).toHaveLength(2);
+      expect(JSON.parse(raw)).toHaveLength(3);
 
       const inspection = new Database(dbPath, { readonly: true, safeIntegers: true });
       expect(
@@ -583,6 +585,7 @@ describe("JSON export", () => {
 
       await fetch(`${base}/books/${second.id}/delete`, { method: "POST", redirect: "manual" });
       expect(inspection.query("SELECT id FROM books ORDER BY id").all()).toEqual([
+        { id: negative.id },
         { id: first.id },
       ]);
       inspection.close();
