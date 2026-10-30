@@ -1,5 +1,10 @@
 import { join } from "node:path";
 import { openShelf, parseBookId, type BookId, type ExportedBook } from "./db";
+import {
+  isMutationAction,
+  mutationActions,
+  type MutationAction,
+} from "./mutation-routes";
 import { parseView, viewLocation } from "./view-state";
 import { page } from "./views";
 
@@ -17,10 +22,10 @@ const parseRevision = (value: string | undefined) =>
 export function startServer(options: { port?: number; dbPath?: string } = {}) {
   const revision = parseRevision(process.env.APP_REVISION);
   const shelf = openShelf(options.dbPath);
-  const mutationHandlers = new Map<string, (id: BookId) => boolean>([
-    ["toggle", (id) => shelf.toggle(id)],
-    ["delete", (id) => shelf.remove(id)],
-  ]);
+  const mutationHandlers: Record<MutationAction, (id: BookId) => boolean> = {
+    [mutationActions.toggle]: (id) => shelf.toggle(id),
+    [mutationActions.delete]: (id) => shelf.remove(id),
+  };
   const server = Bun.serve({
     port: options.port ?? Number(process.env.PORT ?? 3000),
     async fetch(request) {
@@ -55,10 +60,11 @@ export function startServer(options: { port?: number; dbPath?: string } = {}) {
 
       const match = url.pathname.match(/^\/books\/(-?\d+)\/([^/]+)$/);
       if (request.method === "POST" && match) {
-        const handler = mutationHandlers.get(match[2]);
-        if (!handler) return new Response("Not found", { status: 404 });
+        const action = match[2];
+        if (!isMutationAction(action)) return new Response("Not found", { status: 404 });
+        const handler = mutationHandlers[action];
         const id = parseBookId(match[1]);
-        if (id === undefined) return redirect(viewLocation(url, view));
+        if (id === undefined) return html(page(shelf.list(), view, "Book not found."), 404);
         const changed = handler(id);
         if (!changed) return html(page(shelf.list(), view, "Book not found."), 404);
         return redirect(viewLocation(url, view));

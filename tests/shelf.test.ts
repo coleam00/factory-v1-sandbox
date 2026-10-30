@@ -229,9 +229,17 @@ describe("HTTP routes", () => {
             method: "POST",
             redirect: "manual",
           });
-          expect(response.status).toBe(303);
+          expect(response.status).toBe(404);
+          expect(await response.text()).toContain("Book not found.");
         }
       }
+
+      const unchanged = new Database(dbPath, { readonly: true, safeIntegers: true });
+      expect(unchanged.query("SELECT id, read FROM books ORDER BY id").all()).toEqual([
+        { id: minimumId, read: 0n },
+        { id: maximumId, read: 0n },
+      ]);
+      unchanged.close();
 
       for (const id of [minimumId, maximumId]) {
         let response = await fetch(`${signedBase}/books/${id}/toggle`, {

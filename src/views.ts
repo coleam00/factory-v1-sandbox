@@ -1,4 +1,5 @@
 import type { Book } from "./db";
+import { mutationActions, mutationPath } from "./mutation-routes";
 import {
   applyView,
   viewFields,
@@ -37,11 +38,11 @@ export function page(
   const rows = visibleBooks
     .map(
       (book) => `<li class="book${book.read ? " is-read" : ""}">
-        <form method="post" action="/books/${book.id}/toggle${query}">
+        <form method="post" action="${mutationPath(book.id, mutationActions.toggle)}${query}">
           <button class="check" aria-label="Mark ${book.read ? "unread" : "read"}">${book.read ? "✓" : ""}</button>
         </form>
         <div><strong>${escapeHtml(book.title)}</strong><span>${escapeHtml(book.author)}</span></div>
-        <form method="post" action="/books/${book.id}/delete${query}" class="delete-form">
+        <form method="post" action="${mutationPath(book.id, mutationActions.delete)}${query}" class="delete-form">
           <button class="delete" aria-label="Delete ${escapeHtml(book.title)}">Delete</button>
         </form>
       </li>`,
