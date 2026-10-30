@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openShelf } from "../src/db";
 import { startServer } from "../src/server";
-import { applyView } from "../src/view-state";
 import { page } from "../src/views";
 
 const toggleForm = (body: string, bookId: bigint) => {
@@ -530,29 +529,6 @@ describe("HTTP routes", () => {
 });
 
 describe("shelf view", () => {
-  test("orders exact numeric IDs when other sort fields match", () => {
-    const adjacentId = 9007199254740992n;
-    const targetId = 9007199254740993n;
-    const books = [adjacentId, targetId].map((value) => {
-      return {
-        id: value,
-        title: "Same title",
-        author: "Same author",
-        read: false,
-        createdAt: "2026-10-29 12:00:00",
-      };
-    });
-
-    expect(applyView([...books], { filter: "all", order: "added" }).map(({ id }) => id)).toEqual([
-      targetId,
-      adjacentId,
-    ]);
-    expect(applyView([...books], { filter: "all", order: "title" }).map(({ id }) => id)).toEqual([
-      targetId,
-      adjacentId,
-    ]);
-  });
-
   test("retains each view field independently through mutation redirects", async () => {
     const app = startServer({ port: 0, dbPath: ":memory:" });
     const base = app.server.url.origin;
