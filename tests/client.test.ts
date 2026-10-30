@@ -357,7 +357,7 @@ describe("browser shelf mutations", () => {
     expect(client.reloads()).toBe(0);
   });
 
-  test("preserves exact large IDs through rendered toggle and delete mutations", async () => {
+  test("preserves exact signed and large IDs through rendered toggle and delete mutations", async () => {
     const directory = await mkdtemp(join(tmpdir(), "shelf-large-ids-"));
     const dbPath = join(directory, "shelf.db");
     const schema = openShelf(dbPath);
@@ -369,6 +369,9 @@ describe("browser shelf mutations", () => {
     seed
       .query("INSERT INTO books (id, title, author) VALUES (?, ?, ?)")
       .run(9007199254740993n, "Second adjacent ID", "Test Author");
+    seed
+      .query("INSERT INTO books (id, title, author) VALUES (?, ?, ?)")
+      .run(-1n, "Negative ID", "Test Author");
     seed.close();
 
     const app = startServer({ port: 0, dbPath });
@@ -383,6 +386,31 @@ describe("browser shelf mutations", () => {
       expect(renderedBook(initialPage, "Second adjacent ID")).toContain(
         `action="${defaultRenderedAction("/books/9007199254740993/toggle")}"`,
       );
+      expect(renderedBook(initialPage, "Negative ID")).toContain(
+        `action="${defaultRenderedAction("/books/-1/toggle")}"`,
+      );
+
+      await client.submit(
+        new TestSubmitEvent(renderedForm(initialPage, defaultAction("/books/-1/toggle"))),
+      );
+
+      expect(requests).toEqual([`${origin}${defaultAction("/books/-1/toggle")}`]);
+      expect(renderedBook(client.document.currentMain.markup, "Negative ID")).toStartWith(
+        '<li class="book is-read">',
+      );
+
+      await client.submit(
+        new TestSubmitEvent(
+          renderedForm(client.document.currentMain.markup, defaultAction("/books/-1/delete")),
+        ),
+      );
+
+      expect(requests).toEqual([
+        `${origin}${defaultAction("/books/-1/toggle")}`,
+        `${origin}${defaultAction("/books/-1/delete")}`,
+      ]);
+      expect(client.document.currentMain.markup).not.toContain("Negative ID");
+
       await client.submit(
         new TestSubmitEvent(
           renderedForm(
@@ -393,6 +421,8 @@ describe("browser shelf mutations", () => {
       );
 
       expect(requests).toEqual([
+        `${origin}${defaultAction("/books/-1/toggle")}`,
+        `${origin}${defaultAction("/books/-1/delete")}`,
         `${origin}${defaultAction("/books/9007199254740993/toggle")}`,
       ]);
       expect(renderedBook(client.document.currentMain.markup, "First adjacent ID")).toStartWith(
@@ -412,6 +442,8 @@ describe("browser shelf mutations", () => {
       );
 
       expect(requests).toEqual([
+        `${origin}${defaultAction("/books/-1/toggle")}`,
+        `${origin}${defaultAction("/books/-1/delete")}`,
         `${origin}${defaultAction("/books/9007199254740993/toggle")}`,
         `${origin}${defaultAction("/books/9007199254740993/delete")}`,
       ]);
@@ -424,7 +456,7 @@ describe("browser shelf mutations", () => {
     }
   });
 
-  test("keeps HTTP mutations within digit-only SQLite IDs", async () => {
+  test("rejects IDs outside SQLite's integer range", async () => {
     const directory = await mkdtemp(join(tmpdir(), "shelf-out-of-range-ids-"));
     const dbPath = join(directory, "shelf.db");
     const schema = openShelf(dbPath);
@@ -440,11 +472,7 @@ describe("browser shelf mutations", () => {
 
     const app = startServer({ port: 0, dbPath });
     try {
-      for (const id of [
-        -9223372036854775809n,
-        -9223372036854775808n,
-        9223372036854775808n,
-      ]) {
+      for (const id of [-9223372036854775809n, 9223372036854775808n]) {
         for (const operation of ["toggle", "delete"]) {
           const response = await fetch(new URL(`/books/${id}/${operation}`, app.server.url), {
             method: "POST",
@@ -458,6 +486,25 @@ describe("browser shelf mutations", () => {
         }
       }
 
+      const minimumToggle = await fetch(
+        new URL("/books/-9223372036854775808/toggle", app.server.url),
+        { method: "POST", redirect: "manual" },
+      );
+      expect(minimumToggle.status).toBe(303);
+      const toggledPage = await (await fetch(app.server.url)).text();
+      expect(renderedBook(toggledPage, "Minimum ID")).toStartWith(
+        '<li class="book is-read">',
+      );
+
+      const minimumDelete = await fetch(
+        new URL("/books/-9223372036854775808/delete", app.server.url),
+        { method: "POST", redirect: "manual" },
+      );
+      expect(minimumDelete.status).toBe(303);
+      const deletedPage = await (await fetch(app.server.url)).text();
+      expect(deletedPage).not.toContain("Minimum ID");
+      expect(renderedBook(deletedPage, "Maximum ID")).toStartWith('<li class="book">');
+
       const maximumToggle = await fetch(
         new URL("/books/9223372036854775807/toggle", app.server.url),
         { method: "POST", redirect: "manual" },
@@ -467,7 +514,6 @@ describe("browser shelf mutations", () => {
       expect(renderedBook(maximumToggledPage, "Maximum ID")).toStartWith(
         '<li class="book is-read">',
       );
-      expect(renderedBook(maximumToggledPage, "Minimum ID")).toStartWith('<li class="book">');
     } finally {
       app.close();
       await rm(directory, { recursive: true, force: true });

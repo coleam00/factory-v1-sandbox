@@ -263,39 +263,6 @@ describe("HTTP routes", () => {
     expect((await fetch(`${base}/missing`)).status).toBe(404);
   });
 
-  test("does not admit negative IDs in mutation routes", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "shelf-negative-route-"));
-    const dbPath = join(directory, "shelf.db");
-    const setup = openShelf(dbPath);
-    setup.close();
-
-    const seed = new Database(dbPath, { safeIntegers: true });
-    seed
-      .query("INSERT INTO books (id, title, author) VALUES (?, ?, ?)")
-      .run(-1n, "Negative ID", "Route boundary");
-    seed.close();
-
-    const app = startServer({ port: 0, dbPath });
-    try {
-      for (const action of mutationActions) {
-        const response = await fetch(`${app.server.url.origin}/books/-1/${action}`, {
-          method: "POST",
-          redirect: "manual",
-        });
-        expect(response.status).toBe(404);
-      }
-
-      const unchanged = new Database(dbPath, { readonly: true, safeIntegers: true });
-      expect(unchanged.query("SELECT id, read FROM books").all()).toEqual([
-        { id: -1n, read: 0n },
-      ]);
-      unchanged.close();
-    } finally {
-      app.close();
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
-
   test("returns 404 for mutation requests with ids outside SQLite's range", async () => {
     const firstExcludedId = 9223372036854775808n;
 

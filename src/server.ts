@@ -50,7 +50,7 @@ export function startServer(options: { port?: number; dbPath?: string } = {}) {
         return redirect(viewLocation(url, view));
       }
 
-      const match = url.pathname.match(/^\/books\/(\d+)\/(toggle|delete)$/);
+      const match = url.pathname.match(/^\/books\/(-?\d+)\/(toggle|delete)$/);
       if (request.method === "POST" && match) {
         const id = bookId(BigInt(match[1]));
         if (id === null) {
