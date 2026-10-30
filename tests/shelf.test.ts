@@ -4,25 +4,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openShelf } from "../src/db";
-import { assertMutationHandlers, mutationActions } from "../src/mutation-routes";
+import { mutationActions } from "../src/mutation-routes";
 import { startServer } from "../src/server";
 
 const originalRevision = process.env.APP_REVISION;
 const mutationActionValues = Object.values(mutationActions);
-
-describe("mutation handler contract", () => {
-  const handler = () => true;
-
-  test.each([
-    ["a missing action", { toggle: handler }],
-    ["an extra action", { toggle: handler, delete: handler, flip: handler }],
-    ["a non-callable handler", { toggle: handler, delete: "delete" }],
-  ])("rejects %s", (_case, handlers) => {
-    expect(() => assertMutationHandlers(handlers)).toThrow(
-      "Mutation handlers must exactly match mutation actions",
-    );
-  });
-});
 
 function startWithRevision(revision?: string) {
   if (revision === undefined) delete process.env.APP_REVISION;

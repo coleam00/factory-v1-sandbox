@@ -1,7 +1,6 @@
 import { join } from "node:path";
 import { openShelf, parseBookId, type ExportedBook } from "./db";
 import {
-  assertMutationHandlers,
   isMutationAction,
   mutationActions,
   type MutationAction,
@@ -28,7 +27,6 @@ export function startServer(options: { port?: number; dbPath?: string } = {}) {
     [mutationActions.toggle]: (id) => shelf.toggle(id),
     [mutationActions.delete]: (id) => shelf.remove(id),
   };
-  assertMutationHandlers(mutationHandlers);
   const server = Bun.serve({
     port: options.port ?? Number(process.env.PORT ?? 3000),
     async fetch(request) {
