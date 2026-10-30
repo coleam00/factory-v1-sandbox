@@ -17,6 +17,7 @@ button { border: 0; border-radius: 8px; cursor: pointer; font: inherit; font-wei
 section { margin-top: 34px; }
 h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .12em; color: #71756d; }
 .shelf-heading { display: flex; align-items: end; justify-content: space-between; gap: 20px; margin-bottom: 12px; }
+.backup-link { color: #315e3d; font-weight: 700; }
 .view-controls { display: flex; align-items: end; gap: 8px; }
 .view-controls label { color: #5f645b; }
 .view-controls select { min-width: 128px; padding: 7px 28px 7px 9px; border-color: #d5d1c5; background: #fffdf8; }
@@ -32,5 +33,5 @@ ul { list-style: none; padding: 0; margin: 0; border-top: 1px solid #d5d1c5; }
 .empty { padding: 48px; text-align: center; border: 1px dashed #bbb7ab; border-radius: 12px; }
 .empty p { margin-bottom: 5px; font-weight: 700; }
 .error { margin-top: 12px; color: #9a392e; }
-button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid #d39c2f; outline-offset: 2px; }
+button:focus-visible, input:focus-visible, select:focus-visible, .backup-link:focus-visible { outline: 3px solid #d39c2f; outline-offset: 2px; }
 @media (max-width: 620px) { main { margin-top: 28px; } .add { grid-template-columns: 1fr; } header { align-items: start; } h1 { font-size: 40px; } .shelf-heading { align-items: start; flex-direction: column; } .view-controls { width: 100%; flex-wrap: wrap; } .view-controls label { flex: 1 1 120px; } }

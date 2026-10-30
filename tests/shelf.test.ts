@@ -24,6 +24,28 @@ const ariaLabel = (element: string) => {
 };
 
 describe("page", () => {
+  test("shows the backup download for empty and populated shelves", () => {
+    const populatedShelf = [
+      {
+        id: bookId(1n)!,
+        title: "Dune",
+        author: "Frank Herbert",
+        read: false,
+        createdAt: "2026-10-29 00:00:00",
+      },
+    ];
+
+    for (const books of [[], populatedShelf]) {
+      const body = page(books, { filter: "all", order: "added" });
+      const booksSection = body.match(/<section id="books"[^>]*>([\s\S]*?)<\/section>/)?.[1];
+      expect(
+        booksSection?.match(
+          /<a class="backup-link" href="\/books\/export\.json">Download backup<\/a>/g,
+        ),
+      ).toHaveLength(1);
+    }
+  });
+
   test("names each read toggle for its book and next action", () => {
     const body = page([
       {

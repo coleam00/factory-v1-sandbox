@@ -67,6 +67,7 @@ export function page(
   </form>
   ${error ? `<p class="error" role="alert">${escapeHtml(error)}</p>` : ""}
   <section id="${booksSectionId}" tabindex="-1"><div class="shelf-heading"><h2>Books</h2>
+    <a class="backup-link" href="/books/export.json">Download backup</a>
     <form class="view-controls" method="get" action="/">
       <label>Show<select name="filter">
         ${optionTags(viewFields.filter.options, view.filter)}
