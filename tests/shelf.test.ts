@@ -73,6 +73,96 @@ function startWithRevision(revision?: string) {
   }
 }
 
+async function readActiveSkipLinkEndpoints(body: string) {
+  const skipLinks: { href: string | null; text: string }[] = [];
+  const idOwners: {
+    id: string;
+    tagName: string;
+    tabindex: string | null;
+  }[] = [];
+  let templateDepth = 0;
+  let currentSkipLink: (typeof skipLinks)[number] | undefined;
+
+  const parsedBody = new HTMLRewriter()
+    .on("template", {
+      element(element) {
+        templateDepth += 1;
+        element.onEndTag(() => templateDepth -= 1);
+      },
+    })
+    .on("a.skip-link", {
+      element(element) {
+        if (templateDepth > 0) return;
+        currentSkipLink = { href: element.getAttribute("href"), text: "" };
+        skipLinks.push(currentSkipLink);
+        element.onEndTag(() => currentSkipLink = undefined);
+      },
+      text(text) {
+        if (templateDepth === 0 && currentSkipLink) {
+          currentSkipLink.text += text.text;
+        }
+      },
+    })
+    .on("[id]", {
+      element(element) {
+        if (templateDepth > 0) return;
+        const id = element.getAttribute("id");
+        if (id === null) return;
+        idOwners.push({
+          id,
+          tagName: element.tagName,
+          tabindex: element.getAttribute("tabindex"),
+        });
+      },
+    })
+    .transform(new Response(body));
+  await parsedBody.text();
+
+  return { skipLinks, idOwners };
+}
+
+async function readActiveTargetHeadings(body: string, targetId: string) {
+  const headings: string[] = [];
+  let templateDepth = 0;
+  let currentHeading = -1;
+
+  const parsedBody = new HTMLRewriter()
+    .on("template", {
+      element(element) {
+        templateDepth += 1;
+        element.onEndTag(() => templateDepth -= 1);
+      },
+    })
+    .on(`[id="${targetId}"] h2`, {
+      element(element) {
+        if (templateDepth > 0) return;
+        currentHeading = headings.push("") - 1;
+        element.onEndTag(() => currentHeading = -1);
+      },
+      text(text) {
+        if (templateDepth === 0 && currentHeading >= 0) {
+          headings[currentHeading] += text.text;
+        }
+      },
+    })
+    .transform(new Response(body));
+  await parsedBody.text();
+
+  return headings;
+}
+
+test("structural reader excludes inert template endpoints and label text", async () => {
+  const body = `<template><a class="skip-link" href="#books">Skip to books</a></template>
+    <a class="skip-link" href="#books">Skip <template>nowhere </template>to books</a>
+    <template><section id="books" tabindex="-1"><h2>Books</h2></section></template>
+    <section id="books" tabindex="-1"><h2>Books<template> nowhere</template></h2></section>`;
+
+  const { skipLinks, idOwners } = await readActiveSkipLinkEndpoints(body);
+  expect(skipLinks).toEqual([{ href: "#books", text: "Skip to books" }]);
+  expect(idOwners).toEqual([{ id: "books", tagName: "section", tabindex: "-1" }]);
+  expect(await readActiveTargetHeadings(body, "books")).toEqual(["Books"]);
+});
+
 describe("database", () => {
   test("adds, lists, toggles, and deletes books", () => {
     const db = openShelf(":memory:");
@@ -98,7 +188,22 @@ describe("HTTP routes", () => {
 
   test("renders, creates, toggles, and deletes a book", async () => {
     let response = await fetch(base);
-    expect(await response.text()).toContain("<b>0</b> of 0 read");
+    let body = await response.text();
+    expect(body).toContain("<b>0</b> of 0 read");
+    const { skipLinks, idOwners } = await readActiveSkipLinkEndpoints(body);
+    expect(skipLinks).toHaveLength(1);
+    expect(skipLinks[0]!.text.trim()).toBe("Skip to books");
+    expect(skipLinks[0]!.href?.[0]).toBe("#");
+    const targetId = decodeURIComponent(skipLinks[0]!.href!.slice(1));
+    const targetOwners = idOwners.filter(({ id }) => id === targetId);
+    expect(targetOwners).toHaveLength(1);
+    expect(targetOwners[0]).toMatchObject({
+      tagName: "section",
+      tabindex: "-1",
+    });
+
+    const targetHeadings = await readActiveTargetHeadings(body, targetId);
+    expect(targetHeadings.map((heading) => heading.trim())).toEqual(["Books"]);
 
     response = await fetch(`${base}/books`, {
       method: "POST",
@@ -108,7 +213,7 @@ describe("HTTP routes", () => {
     expect(response.status).toBe(303);
     expect(response.headers.get("location")).toBe("/");
 
-    let body = await (await fetch(base)).text();
+    body = await (await fetch(base)).text();
     expect(body).toContain("Dune");
     expect(body).toContain('aria-label="Mark Dune as read (book 1)"');
     expect(body).toContain("<b>0</b> of 1 read");
