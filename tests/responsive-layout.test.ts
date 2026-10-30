@@ -270,8 +270,18 @@ test(
       }
       for (const control of layout.rowControls) expect(control.tabIndex).toBeGreaterThanOrEqual(0);
 
+      const expectedFocusOrder = [
+        "title",
+        "author",
+        "add",
+        "filter",
+        "order",
+        "apply",
+        "check",
+        "delete",
+      ];
       const focusOrder: string[] = [];
-      for (let step = 0; step < 5; step += 1) {
+      for (let step = 0; step < expectedFocusOrder.length + 4; step += 1) {
         await cdp.send("Input.dispatchKeyEvent", {
           type: "rawKeyDown",
           key: "Tab",
@@ -291,14 +301,18 @@ test(
             if (active.matches('input[name="title"]')) return 'title';
             if (active.matches('input[name="author"]')) return 'author';
             if (active.matches('.add button')) return 'add';
+            if (active.matches('select[name="filter"]')) return 'filter';
+            if (active.matches('select[name="order"]')) return 'order';
+            if (active.matches('.view-controls button')) return 'apply';
             if (active.matches('.check')) return 'check';
             if (active.matches('.delete')) return 'delete';
-            return 'other';
+            return null;
           })()`,
-        })) as { result: { value: string } };
-        focusOrder.push(focused.result.value);
+        })) as { result: { value: string | null } };
+        if (focused.result.value) focusOrder.push(focused.result.value);
+        if (focused.result.value === "delete") break;
       }
-      expect(focusOrder).toEqual(["title", "author", "add", "check", "delete"]);
+      expect(focusOrder).toEqual(expectedFocusOrder);
 
       const toggled = cdp.event("Page.loadEventFired");
       await click(cdp, ".check");
