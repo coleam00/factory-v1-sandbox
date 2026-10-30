@@ -60,19 +60,20 @@ type CdpMessage =
 
 function decodeCdpMessage(value: unknown): CdpMessage {
   const message = record(value, "CDP message");
-  if (typeof message.id === "number") {
+  if (Object.hasOwn(message, "id")) {
+    const id = finiteNumber(message.id, "CDP message.id");
     if (message.error !== undefined) {
       const error = record(message.error, "CDP error");
       return {
         kind: "error",
-        id: finiteNumber(message.id, "CDP message.id"),
+        id,
         message: stringValue(error.message, "CDP error.message"),
       };
     }
     if (Object.hasOwn(message, "result")) {
       return {
         kind: "response",
-        id: finiteNumber(message.id, "CDP message.id"),
+        id,
         result: message.result,
       };
     }
@@ -140,36 +141,75 @@ async function devtoolsPort(
 async function connectCdp(url: string) {
   const socket = new WebSocket(url);
   const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
-  const events = new Map<string, Array<() => void>>();
+  const events = new Map<
+    string,
+    Array<{ resolve: () => void; reject: (error: Error) => void }>
+  >();
   let nextId = 1;
   let connectionError: Error | undefined;
 
+  const failConnection = (error: Error) => {
+    if (connectionError) return;
+    connectionError = error;
+    for (const request of pending.values()) request.reject(error);
+    pending.clear();
+    for (const listeners of events.values()) {
+      for (const listener of listeners) listener.reject(error);
+    }
+    events.clear();
+    if (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN) {
+      socket.close();
+    }
+  };
+
   socket.addEventListener("message", (event) => {
+    if (connectionError) return;
     try {
       const parsed: unknown = JSON.parse(String(event.data));
       const message = decodeCdpMessage(parsed);
       if (message.kind === "event") {
-        events.get(message.method)?.splice(0).forEach((resolve) => resolve());
+        const listeners = events.get(message.method);
+        events.delete(message.method);
+        listeners?.forEach(({ resolve }) => resolve());
         return;
       }
 
       const request = pending.get(message.id);
-      if (!request) return;
+      if (!request) {
+        failConnection(new Error(`CDP response ${message.id} did not match a pending request`));
+        return;
+      }
       pending.delete(message.id);
       if (message.kind === "error") request.reject(new Error(message.message));
       else request.resolve(message.result);
     } catch (error) {
-      connectionError = error instanceof Error ? error : new Error(String(error));
-      for (const request of pending.values()) request.reject(connectionError);
-      pending.clear();
+      failConnection(error instanceof Error ? error : new Error(String(error)));
     }
+  });
+  socket.addEventListener("error", () => {
+    failConnection(new Error("Chrome DevTools connection failed"));
+  });
+  socket.addEventListener("close", () => {
+    failConnection(new Error("Chrome DevTools connection closed"));
   });
 
   await new Promise<void>((resolve, reject) => {
-    socket.addEventListener("open", () => resolve(), { once: true });
-    socket.addEventListener("error", () => reject(new Error("Could not connect to Chrome DevTools")), {
-      once: true,
-    });
+    const cleanup = () => {
+      socket.removeEventListener("open", onOpen);
+      socket.removeEventListener("error", onFailure);
+      socket.removeEventListener("close", onFailure);
+    };
+    const onOpen = () => {
+      cleanup();
+      resolve();
+    };
+    const onFailure = () => {
+      cleanup();
+      reject(connectionError ?? new Error("Could not connect to Chrome DevTools"));
+    };
+    socket.addEventListener("open", onOpen);
+    socket.addEventListener("error", onFailure);
+    socket.addEventListener("close", onFailure);
   });
 
   return {
@@ -177,18 +217,23 @@ async function connectCdp(url: string) {
       if (connectionError) return Promise.reject(connectionError);
       const id = nextId++;
       const response = new Promise<unknown>((resolve, reject) => pending.set(id, { resolve, reject }));
-      socket.send(JSON.stringify({ id, method, params }));
+      try {
+        socket.send(JSON.stringify({ id, method, params }));
+      } catch (error) {
+        failConnection(error instanceof Error ? error : new Error(String(error)));
+      }
       return response;
     },
     event(method: string) {
-      return new Promise<void>((resolve) => {
+      if (connectionError) return Promise.reject(connectionError);
+      return new Promise<void>((resolve, reject) => {
         const listeners = events.get(method) ?? [];
-        listeners.push(resolve);
+        listeners.push({ resolve, reject });
         events.set(method, listeners);
       });
     },
     close() {
-      socket.close();
+      failConnection(new Error("Chrome DevTools connection closed"));
     },
   };
 }
@@ -315,6 +360,13 @@ test("rejects malformed Chrome boundary payloads", () => {
   const rejectedPayloads: Array<[string, () => unknown]> = [
     ["CDP response", () => decodeCdpMessage({ id: 1 })],
     ["CDP error", () => decodeCdpMessage({ id: 1, error: { message: 500 } })],
+    ["CDP string identifier", () => decodeCdpMessage({ id: "1", method: "Page.loadEventFired" })],
+    ["CDP boolean identifier", () => decodeCdpMessage({ id: true, method: "Page.loadEventFired" })],
+    ["CDP null identifier", () => decodeCdpMessage({ id: null, method: "Page.loadEventFired" })],
+    ["CDP object identifier", () => decodeCdpMessage({ id: {}, method: "Page.loadEventFired" })],
+    ["CDP array identifier", () => decodeCdpMessage({ id: [], method: "Page.loadEventFired" })],
+    ["CDP NaN identifier", () => decodeCdpMessage({ id: NaN, method: "Page.loadEventFired" })],
+    ["CDP infinite identifier", () => decodeCdpMessage({ id: Infinity, method: "Page.loadEventFired" })],
     [
       "evaluation exception",
       () => decodeEvaluation({ result: { value: null }, exceptionDetails: {} }, nullable(stringValue)),
@@ -338,6 +390,94 @@ test("rejects malformed Chrome boundary payloads", () => {
       continue;
     }
     throw new Error(`${name} accepted a malformed payload`);
+  }
+});
+
+type CdpTestPeer = {
+  send(data: string): number;
+  terminate(): void;
+};
+
+function cdpTestServer() {
+  let acceptPeer: (peer: CdpTestPeer) => void;
+  const peer = new Promise<CdpTestPeer>((resolve) => {
+    acceptPeer = resolve;
+  });
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request, server) {
+      if (server.upgrade(request)) return;
+      return new Response("WebSocket upgrade required", { status: 426 });
+    },
+    websocket: {
+      open(socket) {
+        acceptPeer(socket);
+      },
+      message() {},
+    },
+  });
+  const url = new URL(server.url);
+  url.protocol = "ws:";
+  return { peer, url: url.href, stop: () => server.stop(true) };
+}
+
+async function rejectionOf(promise: Promise<unknown>) {
+  try {
+    await promise;
+  } catch (error) {
+    if (error instanceof Error) return error;
+    throw new Error(`Promise rejected with a non-Error value: ${String(error)}`);
+  }
+  throw new Error("Expected promise to reject");
+}
+
+test("rejects current and future CDP waiters after terminal failures", async () => {
+  const closedServer = cdpTestServer();
+  const malformedServer = cdpTestServer();
+  const unknownResponseServer = cdpTestServer();
+
+  try {
+    const closedClient = await connectCdp(closedServer.url);
+    const closedPeer = await closedServer.peer;
+    const command = closedClient.send("Page.enable");
+    const event = closedClient.event("Page.loadEventFired");
+    const commandRejected = rejectionOf(command);
+    const eventRejected = rejectionOf(event);
+    closedPeer.terminate();
+    const [commandError, eventError] = await Promise.all([commandRejected, eventRejected]);
+    expect(commandError.message).toBe("Chrome DevTools connection closed");
+    expect(eventError.message).toBe("Chrome DevTools connection closed");
+    expect((await rejectionOf(closedClient.send("Runtime.enable"))).message).toBe(
+      "Chrome DevTools connection closed",
+    );
+    expect((await rejectionOf(closedClient.event("Page.loadEventFired"))).message).toBe(
+      "Chrome DevTools connection closed",
+    );
+
+    const malformedClient = await connectCdp(malformedServer.url);
+    const malformedPeer = await malformedServer.peer;
+    const malformedEvent = malformedClient.event("Page.loadEventFired");
+    const malformedEventRejected = rejectionOf(malformedEvent);
+    malformedPeer.send('{"id":"not-a-number","method":"Page.loadEventFired"}');
+    expect((await malformedEventRejected).message).toBe(
+      "CDP message.id must be a finite number",
+    );
+
+    const unknownResponseClient = await connectCdp(unknownResponseServer.url);
+    const unknownResponsePeer = await unknownResponseServer.peer;
+    const unknownResponseEvent = unknownResponseClient.event("Page.loadEventFired");
+    const unknownResponseEventRejected = rejectionOf(unknownResponseEvent);
+    unknownResponsePeer.send('{"id":999,"result":{}}');
+    expect((await unknownResponseEventRejected).message).toBe(
+      "CDP response 999 did not match a pending request",
+    );
+  } finally {
+    await Promise.all([
+      closedServer.stop(),
+      malformedServer.stop(),
+      unknownResponseServer.stop(),
+    ]);
   }
 });
 
