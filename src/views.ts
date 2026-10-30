@@ -7,6 +7,7 @@ import {
 } from "./view-state";
 
 const booksSectionId = "books";
+const routeBookId = (id: Book["id"]) => (/^\d+$/.test(id) ? id : null);
 
 const escapeHtml = (value: string) =>
   value.replace(/[&<>"']/g, (char) =>
@@ -35,17 +36,21 @@ export function page(
   const visibleBooks = applyView(books, view);
   const query = viewQuery(view);
   const rows = visibleBooks
-    .map(
-      (book) => `<li class="book${book.read ? " is-read" : ""}">
-        <form method="post" action="/books/${book.id}/toggle${query}">
+    .map((book) => {
+      const id = routeBookId(book.id);
+      const toggle = id === null ? "" : `<form method="post" action="/books/${id}/toggle${query}">
           <button class="check" aria-label="Mark ${book.read ? "unread" : "read"}">${book.read ? "✓" : ""}</button>
-        </form>
-        <div><strong>${escapeHtml(book.title)}</strong><span>${escapeHtml(book.author)}</span></div>
-        <form method="post" action="/books/${book.id}/delete${query}" class="delete-form">
+        </form>`;
+      const remove = id === null ? "" : `<form method="post" action="/books/${id}/delete${query}" class="delete-form">
           <button class="delete" aria-label="Delete ${escapeHtml(book.title)}">Delete</button>
-        </form>
-      </li>`,
-    )
+        </form>`;
+
+      return `<li class="book${book.read ? " is-read" : ""}${id === null ? " has-no-actions" : ""}">
+        ${toggle}
+        <div><strong>${escapeHtml(book.title)}</strong><span>${escapeHtml(book.author)}</span></div>
+        ${remove}
+      </li>`;
+    })
     .join("");
   const empty =
     books.length === 0

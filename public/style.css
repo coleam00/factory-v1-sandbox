@@ -23,6 +23,7 @@ h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .12em; color: #
 .view-controls button { padding: 8px 12px; background: #477253; color: white; }
 ul { list-style: none; padding: 0; margin: 0; border-top: 1px solid #d5d1c5; }
 .book { display: grid; grid-template-columns: auto 1fr auto; gap: 14px; align-items: center; padding: 16px 4px; border-bottom: 1px solid #d5d1c5; }
+.book.has-no-actions { grid-template-columns: 1fr; }
 .book strong, .book span { display: block; }
 .book span { margin-top: 3px; font-size: 14px; }
 .check { width: 26px; height: 26px; padding: 0; border: 2px solid #8a8f85; border-radius: 50%; background: transparent; color: white; }

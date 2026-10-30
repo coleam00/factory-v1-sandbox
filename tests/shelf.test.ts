@@ -402,6 +402,38 @@ describe("HTTP routes", () => {
     });
   }
 
+  test("omits mutation controls for negative persisted IDs", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "shelf-test-"));
+    const dbPath = join(directory, "shelf.db");
+    const isolatedApp = startServer({ port: 0, dbPath });
+    const inspectionDb = new Database(dbPath);
+
+    try {
+      const insert = inspectionDb.query(
+        "INSERT INTO books (id, title, author) VALUES (?, ?, ?)",
+      );
+      insert.run(-1, "Negative", "Not routable");
+      insert.run(1, "Positive", "Routable");
+
+      const body = await (await fetch(isolatedApp.server.url)).text();
+      const rows = body.match(/<li class="book[^>]*>[\s\S]*?<\/li>/g) ?? [];
+      const negativeRow = rows.find((row) => row.includes("<strong>Negative</strong>"));
+      const positiveRow = rows.find((row) => row.includes("<strong>Positive</strong>"));
+
+      expect(negativeRow).toBeDefined();
+      expect(negativeRow).toContain('class="book has-no-actions"');
+      expect(negativeRow).not.toContain("<form");
+      expect(negativeRow).not.toContain("/books/-1/toggle");
+      expect(negativeRow).not.toContain("/books/-1/delete");
+      expect(positiveRow).toContain("/books/1/toggle");
+      expect(positiveRow).toContain("/books/1/delete");
+    } finally {
+      inspectionDb.close();
+      isolatedApp.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test("returns 404 without changing the shelf when a book is missing", async () => {
     const app = startServer({ port: 0, dbPath: ":memory:" });
     const base = app.server.url.origin;
