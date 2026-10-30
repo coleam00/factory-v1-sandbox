@@ -3,6 +3,8 @@ import { openShelf } from "./db";
 import { page } from "./views";
 
 const publicDir = join(import.meta.dir, "..", "public");
+const sqliteIntegerMin = -9223372036854775808n;
+const sqliteIntegerMax = 9223372036854775807n;
 const html = (body: string, status = 200) =>
   new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8" } });
 const redirect = () => Response.redirect("/", 303);
@@ -30,6 +32,9 @@ export function startServer(options: { port?: number; dbPath?: string } = {}) {
       const match = url.pathname.match(/^\/books\/(-?\d+)\/(toggle|delete)$/);
       if (request.method === "POST" && match) {
         const id = BigInt(match[1]);
+        if (id < sqliteIntegerMin || id > sqliteIntegerMax) {
+          return new Response("Not found", { status: 404 });
+        }
         match[2] === "toggle" ? shelf.toggle(id) : shelf.remove(id);
         return redirect();
       }

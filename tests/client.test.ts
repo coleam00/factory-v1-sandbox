@@ -411,6 +411,60 @@ describe("browser shelf mutations", () => {
     }
   });
 
+  test("rejects IDs outside SQLite's integer range", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "shelf-out-of-range-ids-"));
+    const dbPath = join(directory, "shelf.db");
+    const schema = openShelf(dbPath);
+    schema.close();
+    const seed = new Database(dbPath);
+    seed
+      .query("INSERT INTO books (id, title, author) VALUES (?, ?, ?)")
+      .run(-9223372036854775808n, "Minimum ID", "Test Author");
+    seed
+      .query("INSERT INTO books (id, title, author) VALUES (?, ?, ?)")
+      .run(9223372036854775807n, "Maximum ID", "Test Author");
+    seed.close();
+
+    const app = startServer({ port: 0, dbPath });
+    try {
+      for (const id of [-9223372036854775809n, 9223372036854775808n]) {
+        for (const operation of ["toggle", "delete"]) {
+          const response = await fetch(new URL(`/books/${id}/${operation}`, app.server.url), {
+            method: "POST",
+            redirect: "manual",
+          });
+          expect(response.status).toBe(404);
+
+          const shelfPage = await (await fetch(app.server.url)).text();
+          expect(renderedBook(shelfPage, "Minimum ID")).toStartWith('<li class="book">');
+          expect(renderedBook(shelfPage, "Maximum ID")).toStartWith('<li class="book">');
+        }
+      }
+
+      const minimumToggle = await fetch(
+        new URL("/books/-9223372036854775808/toggle", app.server.url),
+        { method: "POST", redirect: "manual" },
+      );
+      expect(minimumToggle.status).toBe(303);
+      const toggledPage = await (await fetch(app.server.url)).text();
+      expect(renderedBook(toggledPage, "Minimum ID")).toStartWith(
+        '<li class="book is-read">',
+      );
+
+      const minimumDelete = await fetch(
+        new URL("/books/-9223372036854775808/delete", app.server.url),
+        { method: "POST", redirect: "manual" },
+      );
+      expect(minimumDelete.status).toBe(303);
+      const deletedPage = await (await fetch(app.server.url)).text();
+      expect(deletedPage).not.toContain("Minimum ID");
+      expect(renderedBook(deletedPage, "Maximum ID")).toStartWith('<li class="book">');
+    } finally {
+      app.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   test("confirms a rendered delete before submitting it", async () => {
     const initialPage = page([book(1n, "Kindred")]);
     let requests = 0;
