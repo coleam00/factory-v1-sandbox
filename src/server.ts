@@ -1,9 +1,9 @@
 import { join } from "node:path";
+import { maxBookFieldLength } from "./book-fields";
 import { openShelf } from "./db";
 import { parseView, viewLocation } from "./view-state";
 import { page } from "./views";
 
-const maxBookFieldLength = 200;
 const publicDir = join(import.meta.dir, "..", "public");
 const html = (body: string, status = 200) =>
   new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8" } });

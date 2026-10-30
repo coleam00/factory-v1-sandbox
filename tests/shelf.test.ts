@@ -1,8 +1,17 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { maxBookFieldLength } from "../src/book-fields";
 import { openShelf } from "../src/db";
 import { startServer } from "../src/server";
 
 const originalRevision = process.env.APP_REVISION;
+
+function tagForNamedInput(body: string, name: string) {
+  return body.match(new RegExp(`<input\\b[^>]*\\bname="${name}"[^>]*>`))?.[0];
+}
+
+function attribute(tag: string | undefined, name: string) {
+  return tag?.match(new RegExp(`\\b${name}="([^"]+)"`))?.[1];
+}
 
 function startWithRevision(revision?: string) {
   if (revision === undefined) delete process.env.APP_REVISION;
@@ -51,14 +60,13 @@ describe("HTTP routes", () => {
     let body = await response.text();
     expect(body).toContain("<b>0</b> of 0 read");
     expect(body).toContain(
-      '<p class="add-guidance" id="book-field-guidance">Title and author can each be up to 200 characters after trimming.</p>',
+      `Title and author can each be up to ${maxBookFieldLength} characters after trimming.`,
     );
-    expect(body).toContain(
-      '<input name="title" required aria-describedby="book-field-guidance"',
-    );
-    expect(body).toContain(
-      '<input name="author" required aria-describedby="book-field-guidance"',
-    );
+    const guidanceId = body.match(/<p class="add-guidance" id="([^"]+)">/)?.[1];
+    expect(guidanceId).toBeTruthy();
+    for (const field of ["title", "author"]) {
+      expect(attribute(tagForNamedInput(body, field), "aria-describedby")).toBe(guidanceId);
+    }
     expect(body).not.toMatch(/\bmaxlength\s*=/i);
 
     response = await addBook("Kindred", "Octavia E. Butler");
@@ -115,8 +123,9 @@ describe("HTTP routes", () => {
   });
 
   test("accepts trimmed title and author fields at 200 characters", async () => {
-    const title = "T".repeat(200);
-    const author = "A".repeat(200);
+    expect(maxBookFieldLength).toBe(200);
+    const title = "T".repeat(maxBookFieldLength);
+    const author = "A".repeat(maxBookFieldLength);
 
     const response = await addBook(` ${title} `, ` ${author} `);
     expect(response.status).toBe(303);
@@ -133,14 +142,14 @@ describe("HTTP routes", () => {
 
     const attempts = [
       {
-        title: "T".repeat(201),
+        title: "T".repeat(maxBookFieldLength + 1),
         author: "Valid author",
-        message: "Title must be 200 characters or fewer.",
+        message: `Title must be ${maxBookFieldLength} characters or fewer.`,
       },
       {
         title: "Valid title",
-        author: "A".repeat(201),
-        message: "Author must be 200 characters or fewer.",
+        author: "A".repeat(maxBookFieldLength + 1),
+        message: `Author must be ${maxBookFieldLength} characters or fewer.`,
       },
     ];
 
