@@ -2,6 +2,20 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { openShelf } from "../src/db";
 import { startServer } from "../src/server";
 
+const originalRevision = process.env.APP_REVISION;
+
+function startWithRevision(revision?: string) {
+  if (revision === undefined) delete process.env.APP_REVISION;
+  else process.env.APP_REVISION = revision;
+
+  try {
+    return startServer({ port: 0, dbPath: ":memory:" });
+  } finally {
+    if (originalRevision === undefined) delete process.env.APP_REVISION;
+    else process.env.APP_REVISION = originalRevision;
+  }
+}
+
 describe("database", () => {
   test("adds, lists, toggles, and deletes books", () => {
     const db = openShelf(":memory:");
@@ -20,7 +34,7 @@ describe("HTTP routes", () => {
   let base: string;
 
   beforeAll(() => {
-    app = startServer({ port: 0, dbPath: ":memory:" });
+    app = startWithRevision();
     base = app.server.url.origin;
   });
   afterAll(() => app.close());
@@ -35,16 +49,21 @@ describe("HTTP routes", () => {
       redirect: "manual",
     });
     expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("/");
 
     let body = await (await fetch(base)).text();
     expect(body).toContain("Kindred");
     expect(body).toContain("<b>0</b> of 1 read");
 
-    await fetch(`${base}/books/1/toggle`, { method: "POST" });
+    response = await fetch(`${base}/books/1/toggle`, { method: "POST", redirect: "manual" });
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("/");
     body = await (await fetch(base)).text();
     expect(body).toContain("<b>1</b> of 1 read");
 
-    await fetch(`${base}/books/1/delete`, { method: "POST" });
+    response = await fetch(`${base}/books/1/delete`, { method: "POST", redirect: "manual" });
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("/");
     expect(await (await fetch(base)).text()).toContain("<b>0</b> of 0 read");
   });
 
@@ -56,5 +75,244 @@ describe("HTTP routes", () => {
     expect(invalid.status).toBe(400);
     expect(await invalid.text()).toContain("Title and author are required");
     expect((await fetch(`${base}/missing`)).status).toBe(404);
+  });
+
+  test("returns 404 without changing the shelf when a book is missing", async () => {
+    const app = startServer({ port: 0, dbPath: ":memory:" });
+    const base = app.server.url.origin;
+    const activeView = "filter=all&order=title";
+
+    try {
+      await fetch(`${base}/books`, {
+        method: "POST",
+        body: new URLSearchParams({ title: "Kindred", author: "Octavia E. Butler" }),
+      });
+      const shelfBefore = await (await fetch(`${base}/?${activeView}`)).text();
+
+      for (const action of ["toggle", "delete"] as const) {
+        const response = await fetch(`${base}/books/999/${action}?${activeView}`, {
+          method: "POST",
+          redirect: "manual",
+        });
+
+        expect(response.status).toBe(404);
+        const body = await response.text();
+        expect(body).toContain("Book not found.");
+        expect(body).toContain('<option value="all" selected>');
+        expect(body).toContain('<option value="title" selected>');
+        expect(await (await fetch(`${base}/?${activeView}`)).text()).toBe(shelfBefore);
+      }
+    } finally {
+      app.close();
+    }
+  });
+});
+
+describe("shelf view", () => {
+  test("retains each view field independently through mutation redirects", async () => {
+    const app = startServer({ port: 0, dbPath: ":memory:" });
+    const base = app.server.url.origin;
+    const cases = [
+      ["filter=unread", "/?filter=unread&order=added"],
+      ["order=title", "/?filter=all&order=title"],
+    ] as const;
+
+    try {
+      for (const [query, location] of cases) {
+        const response = await fetch(`${base}/books?${query}`, {
+          method: "POST",
+          body: new URLSearchParams({ title: query, author: "View tester" }),
+          redirect: "manual",
+        });
+
+        expect(response.status).toBe(303);
+        expect(response.headers.get("location")).toBe(location);
+      }
+    } finally {
+      app.close();
+    }
+  });
+
+  test("filters, orders, and retains the active view through mutations", async () => {
+    const app = startServer({ port: 0, dbPath: ":memory:" });
+    const base = app.server.url.origin;
+    const activeView = "filter=unread&order=title";
+    const activeLocation = `/?${activeView}`;
+    const postBook = (title: string) =>
+      fetch(`${base}/books`, {
+        method: "POST",
+        body: new URLSearchParams({ title, author: `${title} author` }),
+        redirect: "manual",
+      });
+
+    try {
+      await postBook("Zebra");
+      await postBook("apple");
+      await postBook("Middle");
+
+      const defaultBody = await (await fetch(base)).text();
+      expect(defaultBody.indexOf("Middle")).toBeLessThan(defaultBody.indexOf("apple"));
+      expect(defaultBody.indexOf("apple")).toBeLessThan(defaultBody.indexOf("Zebra"));
+
+      const fallbackBody = await (
+        await fetch(`${base}/?filter=unsupported&order=unsupported&ignored=value`)
+      ).text();
+      expect(fallbackBody).toContain('<option value="all" selected>');
+      expect(fallbackBody).toContain('<option value="added" selected>');
+      expect(fallbackBody).not.toContain("ignored=value");
+
+      for (const field of ["filter", "order"] as const) {
+        const response = await fetch(`${base}/?${field}=toString`);
+        expect(response.status).toBe(200);
+        const body = await response.text();
+        expect(body).toContain('<option value="all" selected>');
+        expect(body).toContain('<option value="added" selected>');
+        expect(body).toContain('action="/books?filter=all&amp;order=added"');
+      }
+
+      const titleBody = await (await fetch(`${base}/?order=title`)).text();
+      expect(titleBody.indexOf("apple")).toBeLessThan(titleBody.indexOf("Middle"));
+      expect(titleBody.indexOf("Middle")).toBeLessThan(titleBody.indexOf("Zebra"));
+
+      await fetch(`${base}/books/2/toggle`, { method: "POST" });
+      let activeBody = await (await fetch(`${base}/?${activeView}`)).text();
+      expect(activeBody).not.toContain("apple");
+      expect(activeBody).toContain('<option value="unread" selected>');
+      expect(activeBody).toContain('<option value="title" selected>');
+      expect(activeBody).toContain('action="/books?filter=unread&amp;order=title"');
+      expect(activeBody).toContain('action="/books/3/toggle?filter=unread&amp;order=title"');
+      expect(activeBody).toContain("<b>1</b> of 3 read");
+      expect(await (await fetch(`${base}/?${activeView}`)).text()).toBe(activeBody);
+
+      let response = await fetch(`${base}/books?${activeView}`, {
+        method: "POST",
+        body: new URLSearchParams({ title: "", author: "Nobody" }),
+      });
+      expect(response.status).toBe(400);
+      expect(await response.text()).toContain('action="/books?filter=unread&amp;order=title"');
+
+      response = await fetch(`${base}/books?${activeView}`, {
+        method: "POST",
+        body: new URLSearchParams({ title: "Beginning", author: "New author" }),
+        redirect: "manual",
+      });
+      expect(response.status).toBe(303);
+      expect(response.headers.get("location")).toBe(activeLocation);
+      activeBody = await (await fetch(new URL(activeLocation, base))).text();
+      expect(activeBody.indexOf("Beginning")).toBeLessThan(activeBody.indexOf("Middle"));
+
+      response = await fetch(`${base}/books/4/toggle?${activeView}`, {
+        method: "POST",
+        redirect: "manual",
+      });
+      expect(response.status).toBe(303);
+      expect(response.headers.get("location")).toBe(activeLocation);
+      activeBody = await (await fetch(new URL(activeLocation, base))).text();
+      expect(activeBody).not.toContain("Beginning");
+
+      response = await fetch(`${base}/books/3/delete?${activeView}`, {
+        method: "POST",
+        redirect: "manual",
+      });
+      expect(response.status).toBe(303);
+      expect(response.headers.get("location")).toBe(activeLocation);
+      activeBody = await (await fetch(new URL(activeLocation, base))).text();
+      expect(activeBody).not.toContain("Middle");
+
+      await fetch(`${base}/books/1/toggle`, { method: "POST" });
+      expect(await (await fetch(`${base}/?filter=unread`)).text()).toContain("No unread books.");
+      expect(await (await fetch(`${base}/?filter=all`)).text()).toContain("Zebra");
+    } finally {
+      app.close();
+    }
+  });
+});
+
+describe("health", () => {
+  test("reports an absent revision without changing a populated shelf", async () => {
+    const app = startWithRevision();
+
+    try {
+      const created = await fetch(new URL("/books", app.server.url), {
+        method: "POST",
+        body: new URLSearchParams({ title: "Parable of the Sower", author: "Octavia E. Butler" }),
+        redirect: "manual",
+      });
+      expect(created.status).toBe(303);
+      const before = await (await fetch(app.server.url)).text();
+      expect(before).toContain("Parable of the Sower");
+      const response = await fetch(new URL("/health", app.server.url));
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toStartWith("application/json");
+      expect(await response.json()).toEqual({ status: "ok", revision: null });
+      expect(await (await fetch(app.server.url)).text()).toBe(before);
+    } finally {
+      app.close();
+    }
+  });
+
+  test("normalizes a configured full revision", async () => {
+    const app = startWithRevision("ABCDEF0123456789ABCDEF0123456789ABCDEF01");
+
+    try {
+      const response = await fetch(new URL("/health", app.server.url));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        status: "ok",
+        revision: "abcdef0123456789abcdef0123456789abcdef01",
+      });
+    } finally {
+      app.close();
+    }
+  });
+
+  test("rejects a full-length non-hexadecimal revision", async () => {
+    const app = startWithRevision("g".repeat(40));
+
+    try {
+      const response = await fetch(new URL("/health", app.server.url));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ status: "ok", revision: null });
+    } finally {
+      app.close();
+    }
+  });
+
+  test("rejects whitespace around a full revision", async () => {
+    const app = startWithRevision(" 0123456789abcdef0123456789abcdef01234567");
+
+    try {
+      const response = await fetch(new URL("/health", app.server.url));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ status: "ok", revision: null });
+    } finally {
+      app.close();
+    }
+  });
+
+  test("preserves a configured lowercase full revision", async () => {
+    const revision = "0123456789abcdef0123456789abcdef01234567";
+    const app = startWithRevision(revision);
+
+    try {
+      const response = await fetch(new URL("/health", app.server.url));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ status: "ok", revision });
+    } finally {
+      app.close();
+    }
+  });
+
+  test.each([39, 41])("rejects a %i-character hexadecimal revision", async length => {
+    const app = startWithRevision("a".repeat(length));
+
+    try {
+      const response = await fetch(new URL("/health", app.server.url));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ status: "ok", revision: null });
+    } finally {
+      app.close();
+    }
   });
 });
