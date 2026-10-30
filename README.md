@@ -1,6 +1,6 @@
 # Shelf
 
-Shelf is a small, server-rendered personal reading list. Add books, mark them read or unread, and remove them; the data is stored locally in SQLite.
+Shelf is a small, server-rendered personal reading list. Add books, mark them read or unread, remove them, and filter or order the shelf; the data is stored locally in SQLite.
 
 ## Run
 
