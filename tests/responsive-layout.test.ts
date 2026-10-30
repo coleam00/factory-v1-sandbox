@@ -114,6 +114,22 @@ async function connectCdp(url: string) {
 
 type CdpClient = Awaited<ReturnType<typeof connectCdp>>;
 
+const focusTargets = [
+  { name: "title", selector: 'input[name="title"]' },
+  { name: "author", selector: 'input[name="author"]' },
+  { name: "add", selector: ".add button" },
+  { name: "filter", selector: 'select[name="filter"]' },
+  { name: "order", selector: 'select[name="order"]' },
+  { name: "apply", selector: ".view-controls button" },
+  { name: "check", selector: ".check" },
+  { name: "delete", selector: ".delete" },
+] as const;
+
+type FocusObservation =
+  | { kind: "application"; name: (typeof focusTargets)[number]["name"] }
+  | { kind: "outside-document" }
+  | { kind: "unexpected"; identity: string };
+
 async function click(cdp: CdpClient, selector: string) {
   const evaluated = (await cdp.send("Runtime.evaluate", {
     returnByValue: true,
@@ -270,16 +286,7 @@ test(
       }
       for (const control of layout.rowControls) expect(control.tabIndex).toBeGreaterThanOrEqual(0);
 
-      const expectedFocusOrder = [
-        "title",
-        "author",
-        "add",
-        "filter",
-        "order",
-        "apply",
-        "check",
-        "delete",
-      ];
+      const expectedFocusOrder = focusTargets.map(({ name }) => name);
       const focusOrder: string[] = [];
       for (let step = 0; step < expectedFocusOrder.length + 4; step += 1) {
         await cdp.send("Input.dispatchKeyEvent", {
@@ -297,20 +304,31 @@ test(
         const focused = (await cdp.send("Runtime.evaluate", {
           returnByValue: true,
           expression: `(() => {
+            if (!document.hasFocus()) return { kind: 'outside-document' };
             const active = document.activeElement;
-            if (active.matches('input[name="title"]')) return 'title';
-            if (active.matches('input[name="author"]')) return 'author';
-            if (active.matches('.add button')) return 'add';
-            if (active.matches('select[name="filter"]')) return 'filter';
-            if (active.matches('select[name="order"]')) return 'order';
-            if (active.matches('.view-controls button')) return 'apply';
-            if (active.matches('.check')) return 'check';
-            if (active.matches('.delete')) return 'delete';
-            return null;
+            const target = ${JSON.stringify(focusTargets)}.find(({ selector }) => active?.matches(selector));
+            if (target) return { kind: 'application', name: target.name };
+            const attributes = active
+              ? ['name', 'type', 'href', 'aria-label']
+                  .filter((name) => active.hasAttribute(name))
+                  .map((name) => '[' + name + '=' + JSON.stringify(active.getAttribute(name)) + ']')
+                  .join('')
+              : '';
+            const identity = active
+              ? [active.tagName.toLowerCase(), active.id && '#' + active.id, active.className && '.' + String(active.className).trim().replaceAll(' ', '.'), attributes]
+                  .filter(Boolean)
+                  .join('')
+              : 'null';
+            return { kind: 'unexpected', identity };
           })()`,
-        })) as { result: { value: string | null } };
-        if (focused.result.value) focusOrder.push(focused.result.value);
-        if (focused.result.value === "delete") break;
+        })) as { result: { value: FocusObservation } };
+        const observation = focused.result.value;
+        if (observation.kind === "outside-document") continue;
+        if (observation.kind === "unexpected") {
+          throw new Error(`Unexpected in-document focus target: ${observation.identity}`);
+        }
+        focusOrder.push(observation.name);
+        if (observation.name === "delete") break;
       }
       expect(focusOrder).toEqual(expectedFocusOrder);
 
