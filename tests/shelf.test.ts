@@ -315,6 +315,35 @@ describe("HTTP routes", () => {
     expect(body).toContain("<b>0</b> of 1 read");
   });
 
+  test("rejects repeated and file-valued book fields without changing the shelf", async () => {
+    expect((await addBook("Dune", "Frank Herbert")).status).toBe(303);
+    const shelfBefore = await (await fetch(base)).text();
+
+    for (const field of ["title", "author"] as const) {
+      const label = field === "title" ? "Title" : "Author";
+      for (const representation of ["repeated", "file"] as const) {
+        const form = new FormData();
+        form.append(field === "title" ? "author" : "title", "Valid text");
+        if (representation === "repeated") {
+          form.append(field, "Valid text");
+          form.append(field, "X".repeat(maxBookFieldLength + 1));
+        } else {
+          form.append(field, new Blob(["File contents"]), `${field}.txt`);
+        }
+
+        const response = await fetch(`${base}/books`, {
+          method: "POST",
+          body: form,
+        });
+        expect(response.status).toBe(400);
+        expect(await response.text()).toContain(
+          `${label} must be submitted exactly once as text.`,
+        );
+        expect(await (await fetch(base)).text()).toBe(shelfBefore);
+      }
+    }
+  });
+
   test("returns 404 for mutation requests with ids outside SQLite's range", async () => {
     const firstExcludedId = 9223372036854775808n;
 

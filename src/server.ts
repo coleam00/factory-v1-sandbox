@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { maxBookFieldLength } from "./book-fields";
+import { bookFields, maxBookFieldLength } from "./book-fields";
 import { openShelf } from "./db";
 import { parseView, viewLocation } from "./view-state";
 import { page } from "./views";
@@ -11,6 +11,40 @@ const html = (body: string, status = 200) =>
 const redirect = (location: string) => Response.redirect(location, 303);
 const parseRevision = (value: string | undefined) =>
   value && /^[0-9a-f]{40}$/i.test(value) ? value.toLowerCase() : null;
+
+type BookFormResult =
+  | { book: { title: string; author: string } }
+  | { error: string };
+
+const readBookField = (
+  form: FormData,
+  field: (typeof bookFields)[keyof typeof bookFields],
+) => {
+  const entries = form.getAll(field.name);
+  if (entries.length !== 1 || typeof entries[0] !== "string") {
+    return { error: `${field.label} must be submitted exactly once as text.` } as const;
+  }
+  return { value: entries[0].trim() } as const;
+};
+
+const decodeBookForm = (form: FormData): BookFormResult => {
+  const title = readBookField(form, bookFields.title);
+  if ("error" in title) return title;
+  const author = readBookField(form, bookFields.author);
+  if ("error" in author) return author;
+
+  if (!title.value || !author.value) {
+    return { error: "Title and author are required." };
+  }
+  if (title.value.length > maxBookFieldLength) {
+    return { error: `Title must be ${maxBookFieldLength} characters or fewer.` };
+  }
+  if (author.value.length > maxBookFieldLength) {
+    return { error: `Author must be ${maxBookFieldLength} characters or fewer.` };
+  }
+
+  return { book: { title: title.value, author: author.value } };
+};
 
 export function startServer(options: { port?: number; dbPath?: string } = {}) {
   const revision = parseRevision(process.env.APP_REVISION);
@@ -30,32 +64,11 @@ export function startServer(options: { port?: number; dbPath?: string } = {}) {
       }
       if (request.method === "POST" && url.pathname === "/books") {
         const form = await request.formData();
-        const title = String(form.get("title") ?? "").trim();
-        const author = String(form.get("author") ?? "").trim();
-        if (!title || !author) {
-          return html(page(shelf.list(), view, "Title and author are required."), 400);
+        const result = decodeBookForm(form);
+        if ("error" in result) {
+          return html(page(shelf.list(), view, result.error), 400);
         }
-        if (title.length > maxBookFieldLength) {
-          return html(
-            page(
-              shelf.list(),
-              view,
-              `Title must be ${maxBookFieldLength} characters or fewer.`,
-            ),
-            400,
-          );
-        }
-        if (author.length > maxBookFieldLength) {
-          return html(
-            page(
-              shelf.list(),
-              view,
-              `Author must be ${maxBookFieldLength} characters or fewer.`,
-            ),
-            400,
-          );
-        }
-        shelf.add(title, author);
+        shelf.add(result.book.title, result.book.author);
         return redirect(viewLocation(url, view));
       }
 
