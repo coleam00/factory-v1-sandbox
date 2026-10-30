@@ -10,6 +10,7 @@ h1 { font-family: Georgia, serif; font-size: 48px; letter-spacing: -.04em; }
 header p, .book span, .empty span { color: #71756d; }
 .count { padding: 10px 14px; border: 1px solid #d5d1c5; border-radius: 999px; background: #fffdf8; }
 .add { display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: end; padding: 20px; background: #233c2c; border-radius: 14px; box-shadow: 0 10px 30px #20362620; }
+.add-guidance { grid-column: 1 / -1; color: #e6eee6; font-size: 13px; }
 label { color: #e6eee6; font-size: 13px; font-weight: 650; }
 input, select { display: block; width: 100%; margin-top: 7px; padding: 11px 12px; border: 1px solid transparent; border-radius: 8px; font: inherit; }
 button { border: 0; border-radius: 8px; cursor: pointer; font: inherit; font-weight: 700; }

@@ -1,4 +1,5 @@
 import type { Book } from "./db";
+import { bookFields, maxBookFieldLength } from "./book-fields";
 import {
   applyView,
   viewFields,
@@ -6,6 +7,7 @@ import {
   type ViewState,
 } from "./view-state";
 
+const bookFieldGuidanceId = "book-field-guidance";
 const booksSectionId = "books";
 
 const escapeHtml = (value: string) =>
@@ -25,6 +27,9 @@ const optionTags = (
         `<option value="${escapeHtml(value)}"${value === selected ? " selected" : ""}>${escapeHtml(option.label)}</option>`,
     )
     .join("");
+
+const bookInput = (field: (typeof bookFields)[keyof typeof bookFields]) =>
+  `<label>${field.label}<input name="${field.name}" required aria-describedby="${bookFieldGuidanceId}" placeholder="${field.placeholder}"></label>`;
 
 export function page(
   books: Book[],
@@ -61,8 +66,9 @@ export function page(
 <body><a class="skip-link" href="#${booksSectionId}">Skip to books</a><main>
   <header><div><h1>Shelf</h1><p>Your personal reading list</p></div>${count}</header>
   <form class="add" method="post" action="/books${query}">
-    <label>Title<input name="title" required maxlength="200" placeholder="The Left Hand of Darkness"></label>
-    <label>Author<input name="author" required maxlength="200" placeholder="Ursula K. Le Guin"></label>
+    <p class="add-guidance" id="${bookFieldGuidanceId}">Title and author can each be up to ${maxBookFieldLength} characters after trimming.</p>
+    ${bookInput(bookFields.title)}
+    ${bookInput(bookFields.author)}
     <button>Add book</button>
   </form>
   ${error ? `<p class="error" role="alert">${escapeHtml(error)}</p>` : ""}
