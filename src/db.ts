@@ -1,6 +1,14 @@
 import { Database } from "bun:sqlite";
 
-export type BookId = bigint;
+declare const bookIdBrand: unique symbol;
+
+export type BookId = bigint & { readonly [bookIdBrand]: true };
+
+const sqliteIntegerMin = -9223372036854775808n;
+const sqliteIntegerMax = 9223372036854775807n;
+
+export const bookId = (value: bigint): BookId | null =>
+  value >= sqliteIntegerMin && value <= sqliteIntegerMax ? (value as BookId) : null;
 
 export type Book = {
   id: BookId;
@@ -10,9 +18,17 @@ export type Book = {
   createdAt: string;
 };
 
-type BookRow = Omit<Book, "read" | "createdAt"> & {
+export type ExportedBook = Pick<Book, "id" | "title" | "author" | "read">;
+
+type BookRow = Omit<Book, "id" | "read" | "createdAt"> & {
+  id: bigint;
   read: bigint;
   created_at: string;
+};
+
+type ExportedBookRow = Omit<ExportedBook, "id" | "read"> & {
+  id: bigint;
+  read: bigint;
 };
 
 export function openShelf(path = process.env.SHELF_DB ?? "shelf.db") {
@@ -31,7 +47,12 @@ export function openShelf(path = process.env.SHELF_DB ?? "shelf.db") {
   const list = db.query<BookRow, []>(
     "SELECT id, title, author, read, created_at FROM books ORDER BY id DESC",
   );
-  const insert = db.query("INSERT INTO books (title, author) VALUES (?, ?)");
+  const exportList = db.query<ExportedBookRow, []>(
+    "SELECT id, title, author, read FROM books ORDER BY id ASC",
+  );
+  const insert = db.query<{ id: bigint }, [string, string]>(
+    "INSERT INTO books (title, author) VALUES (?, ?) RETURNING id",
+  );
   const toggle = db.query(
     "UPDATE books SET read = CASE read WHEN 0 THEN 1 ELSE 0 END WHERE id = ?",
   );
@@ -39,14 +60,35 @@ export function openShelf(path = process.env.SHELF_DB ?? "shelf.db") {
 
   return {
     list(): Book[] {
-      return list.all().map(({ created_at, read, ...book }) => ({
-        ...book,
-        read: Boolean(read),
-        createdAt: created_at,
-      }));
+      return list.all().map(({ id: rawId, created_at, read, ...book }) => {
+        const id = bookId(rawId);
+        if (id === null) {
+          throw new RangeError(`SQLite returned an out-of-range book ID: ${rawId}`);
+        }
+        return {
+          ...book,
+          id,
+          read: Boolean(read),
+          createdAt: created_at,
+        };
+      });
     },
-    add(title: string, author: string): BookId {
-      return BigInt(insert.run(title.trim(), author.trim()).lastInsertRowid);
+    exportBooks(): ExportedBook[] {
+      return exportList.all().map(({ id: rawId, title, author, read }) => {
+        const id = bookId(rawId);
+        if (id === null) {
+          throw new RangeError(`SQLite returned an out-of-range book ID: ${rawId}`);
+        }
+        return { id, title, author, read: Boolean(read) };
+      });
+    },
+    add(title: string, author: string) {
+      const rawId = insert.get(title.trim(), author.trim())!.id;
+      const id = bookId(rawId);
+      if (id === null) {
+        throw new RangeError(`SQLite returned an out-of-range book ID: ${rawId}`);
+      }
+      return id;
     },
     toggle(id: BookId) {
       return toggle.run(id).changes === 1;

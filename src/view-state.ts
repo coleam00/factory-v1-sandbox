@@ -1,5 +1,8 @@
 import type { Book } from "./db";
 
+const newestIdFirst = (left: Book, right: Book) =>
+  left.id === right.id ? 0 : left.id < right.id ? 1 : -1;
+
 export const viewFields = {
   filter: {
     defaultValue: "all",
@@ -14,8 +17,7 @@ export const viewFields = {
       added: {
         label: "Recently added",
         compare: (left: Book, right: Book) =>
-          right.createdAt.localeCompare(left.createdAt) ||
-          (right.id === left.id ? 0 : right.id > left.id ? 1 : -1),
+          right.createdAt.localeCompare(left.createdAt) || newestIdFirst(left, right),
       },
       title: {
         label: "Title A-Z",
@@ -23,7 +25,7 @@ export const viewFields = {
           const byTitle = left.title.localeCompare(right.title, undefined, {
             sensitivity: "base",
           });
-          return byTitle || (right.id === left.id ? 0 : right.id > left.id ? 1 : -1);
+          return byTitle || newestIdFirst(left, right);
         },
       },
     },
