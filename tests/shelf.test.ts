@@ -113,12 +113,15 @@ describe("HTTP routes", () => {
       const adjacentId = "9007199254740992";
       const targetId = "9007199254740993";
       const missingId = "9007199254740994";
+      const aliasProneMissingId = "9007199254740995";
+      const roundedNeighborId = "9007199254740996";
       const insert = inspectionDb.query(
         "INSERT INTO books (id, title, author) VALUES (?, ?, ?)",
       );
       insert.run(1, "Control", "Still Here");
       insert.run(BigInt(adjacentId), "Adjacent", "Must Not Change");
       insert.run(BigInt(targetId), "Target", "Exact ID");
+      insert.run(BigInt(roundedNeighborId), "Rounded neighbor", "Must Not Change");
       const books = () =>
         inspectionDb
           .query<
@@ -131,12 +134,14 @@ describe("HTTP routes", () => {
 
       try {
         const before = books();
-        const missing = await fetch(`${isolatedApp.server.url}books/${missingId}/${action}`, {
-          method: "POST",
-          redirect: "manual",
-        });
-        expect(missing.status).toBe(404);
-        expect(books()).toEqual(before);
+        for (const absentId of [missingId, aliasProneMissingId]) {
+          const missing = await fetch(`${isolatedApp.server.url}books/${absentId}/${action}`, {
+            method: "POST",
+            redirect: "manual",
+          });
+          expect(missing.status).toBe(404);
+          expect(books()).toEqual(before);
+        }
 
         const body = await (await fetch(isolatedApp.server.url)).text();
         const targetRow = body
@@ -164,9 +169,10 @@ describe("HTTP routes", () => {
             before[0],
             before[1],
             { ...before[2], read: 1 },
+            before[3],
           ]);
         } else {
-          expect(books()).toEqual([before[0], before[1]]);
+          expect(books()).toEqual([before[0], before[1], before[3]]);
         }
       } finally {
         inspectionDb.close();
