@@ -6,10 +6,12 @@ import { page } from "./views";
 const publicDir = join(import.meta.dir, "..", "public");
 const html = (body: string, status = 200) =>
   new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8" } });
-
 const redirect = (location: string) => Response.redirect(location, 303);
+const parseRevision = (value: string | undefined) =>
+  value && /^[0-9a-f]{40}$/i.test(value) ? value.toLowerCase() : null;
 
 export function startServer(options: { port?: number; dbPath?: string } = {}) {
+  const revision = parseRevision(process.env.APP_REVISION);
   const shelf = openShelf(options.dbPath);
   const server = Bun.serve({
     port: options.port ?? Number(process.env.PORT ?? 3000),
@@ -17,6 +19,9 @@ export function startServer(options: { port?: number; dbPath?: string } = {}) {
       const url = new URL(request.url);
       const view = parseView(url);
 
+      if (request.method === "GET" && url.pathname === "/health") {
+        return Response.json({ status: "ok", revision });
+      }
       if (request.method === "GET" && url.pathname === "/") return html(page(shelf.list(), view));
       if (request.method === "GET" && (url.pathname === "/app.js" || url.pathname === "/style.css")) {
         return new Response(Bun.file(join(publicDir, url.pathname.slice(1))));
