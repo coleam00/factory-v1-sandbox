@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { openShelf, type ExportedBook } from "./db";
+import { openShelf } from "./db";
 import { parseView, viewLocation } from "./view-state";
 import { page } from "./views";
 
@@ -8,10 +8,6 @@ const maximumBookId = 9223372036854775807n;
 const html = (body: string, status = 200) =>
   new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8" } });
 const redirect = (location: string) => Response.redirect(location, 303);
-const exportJson = (books: ExportedBook[]) =>
-  JSON.stringify(books, (_key, value) =>
-    typeof value === "bigint" ? JSON.rawJSON(value.toString()) : value,
-  );
 const parseRevision = (value: string | undefined) =>
   value && /^[0-9a-f]{40}$/i.test(value) ? value.toLowerCase() : null;
 
@@ -29,12 +25,17 @@ export function startServer(options: { port?: number; dbPath?: string } = {}) {
       }
       if (request.method === "GET" && url.pathname === "/") return html(page(shelf.list(), view));
       if (request.method === "GET" && url.pathname === "/books/export.json") {
-        return new Response(exportJson(shelf.exportBooks()), {
-          headers: {
-            "content-type": "application/json; charset=utf-8",
-            "content-disposition": 'attachment; filename="shelf.json"',
+        return new Response(
+          JSON.stringify(shelf.exportBooks(), (_key, value) =>
+            typeof value === "bigint" ? JSON.rawJSON(value.toString()) : value,
+          ),
+          {
+            headers: {
+              "content-type": "application/json; charset=utf-8",
+              "content-disposition": 'attachment; filename="shelf.json"',
+            },
           },
-        });
+        );
       }
       if (request.method === "GET" && (url.pathname === "/app.js" || url.pathname === "/style.css")) {
         return new Response(Bun.file(join(publicDir, url.pathname.slice(1))));
