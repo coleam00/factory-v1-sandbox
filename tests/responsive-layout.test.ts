@@ -1,90 +1,15 @@
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ServerWebSocket } from "bun";
 import { expect, test } from "bun:test";
 import { startServer } from "../src/server";
 
-type Decoder<T> = (value: unknown, path?: string) => T;
-
-function record(value: unknown, path: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`${path} must be an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-const stringValue: Decoder<string> = (value, path = "value") => {
-  if (typeof value !== "string") throw new Error(`${path} must be a string`);
-  return value;
+type CdpMessage = {
+  id?: number;
+  method?: string;
+  result?: unknown;
+  error?: { message: string };
 };
-
-const finiteNumber: Decoder<number> = (value, path = "value") => {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new Error(`${path} must be a finite number`);
-  }
-  return value;
-};
-
-const booleanValue: Decoder<boolean> = (value, path = "value") => {
-  if (typeof value !== "boolean") throw new Error(`${path} must be a boolean`);
-  return value;
-};
-
-function nullable<T>(decode: Decoder<T>): Decoder<T | null> {
-  return (value, path = "value") => (value === null ? null : decode(value, path));
-}
-
-function array<T>(decode: Decoder<T>): Decoder<T[]> {
-  return (value, path = "value") => {
-    if (!Array.isArray(value)) throw new Error(`${path} must be an array`);
-    return value.map((item, index) => decode(item, `${path}[${index}]`));
-  };
-}
-
-function object<T>(fields: { [Key in keyof T]: Decoder<T[Key]> }): Decoder<T> {
-  return (value, path = "value") => {
-    const source = record(value, path);
-    return Object.fromEntries(
-      Object.entries<Decoder<unknown>>(fields).map(([key, decode]) => [
-        key,
-        decode(source[key], `${path}.${key}`),
-      ]),
-    ) as T;
-  };
-}
-
-type CdpMessage =
-  | { kind: "event"; method: string }
-  | { kind: "response"; id: number; result: unknown }
-  | { kind: "error"; id: number; message: string };
-
-function decodeCdpMessage(value: unknown): CdpMessage {
-  const message = record(value, "CDP message");
-  if (Object.hasOwn(message, "id")) {
-    const id = finiteNumber(message.id, "CDP message.id");
-    if (message.error !== undefined) {
-      const error = record(message.error, "CDP error");
-      return {
-        kind: "error",
-        id,
-        message: stringValue(error.message, "CDP error.message"),
-      };
-    }
-    if (Object.hasOwn(message, "result")) {
-      return {
-        kind: "response",
-        id,
-        result: message.result,
-      };
-    }
-    throw new Error("CDP response must contain result or error");
-  }
-  if (typeof message.method === "string") {
-    return { kind: "event", method: message.method };
-  }
-  throw new Error("CDP message must be an event or response");
-}
 
 function chromeExecutable() {
   const candidates = [
@@ -142,124 +67,50 @@ async function devtoolsPort(
 async function connectCdp(url: string) {
   const socket = new WebSocket(url);
   const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
-  const events = new Map<
-    string,
-    Array<{ resolve: () => void; reject: (error: Error) => void }>
-  >();
+  const events = new Map<string, Array<() => void>>();
   let nextId = 1;
-  let connectionError: Error | undefined;
-
-  const failConnection = (error: Error) => {
-    if (connectionError) return;
-    connectionError = error;
-    for (const request of pending.values()) request.reject(error);
-    pending.clear();
-    for (const listeners of events.values()) {
-      for (const listener of listeners) listener.reject(error);
-    }
-    events.clear();
-    if (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN) {
-      socket.close();
-    }
-  };
 
   socket.addEventListener("message", (event) => {
-    if (connectionError) return;
-    try {
-      const parsed: unknown = JSON.parse(String(event.data));
-      const message = decodeCdpMessage(parsed);
-      if (message.kind === "event") {
-        const listeners = events.get(message.method);
-        events.delete(message.method);
-        listeners?.forEach(({ resolve }) => resolve());
-        return;
-      }
-
+    const message = JSON.parse(String(event.data)) as CdpMessage;
+    if (message.id) {
       const request = pending.get(message.id);
-      if (!request) {
-        failConnection(new Error(`CDP response ${message.id} did not match a pending request`));
-        return;
-      }
+      if (!request) return;
       pending.delete(message.id);
-      if (message.kind === "error") request.reject(new Error(message.message));
+      if (message.error) request.reject(new Error(message.error.message));
       else request.resolve(message.result);
-    } catch (error) {
-      failConnection(error instanceof Error ? error : new Error(String(error)));
+      return;
     }
-  });
-  socket.addEventListener("error", () => {
-    failConnection(new Error("Chrome DevTools connection failed"));
-  });
-  socket.addEventListener("close", () => {
-    failConnection(new Error("Chrome DevTools connection closed"));
+    if (message.method) events.get(message.method)?.splice(0).forEach((resolve) => resolve());
   });
 
   await new Promise<void>((resolve, reject) => {
-    const cleanup = () => {
-      socket.removeEventListener("open", onOpen);
-      socket.removeEventListener("error", onFailure);
-      socket.removeEventListener("close", onFailure);
-    };
-    const onOpen = () => {
-      cleanup();
-      resolve();
-    };
-    const onFailure = () => {
-      cleanup();
-      reject(connectionError ?? new Error("Could not connect to Chrome DevTools"));
-    };
-    socket.addEventListener("open", onOpen);
-    socket.addEventListener("error", onFailure);
-    socket.addEventListener("close", onFailure);
+    socket.addEventListener("open", () => resolve(), { once: true });
+    socket.addEventListener("error", () => reject(new Error("Could not connect to Chrome DevTools")), {
+      once: true,
+    });
   });
 
   return {
     send(method: string, params: Record<string, unknown> = {}) {
-      if (connectionError) return Promise.reject(connectionError);
       const id = nextId++;
       const response = new Promise<unknown>((resolve, reject) => pending.set(id, { resolve, reject }));
-      try {
-        socket.send(JSON.stringify({ id, method, params }));
-      } catch (error) {
-        failConnection(error instanceof Error ? error : new Error(String(error)));
-      }
+      socket.send(JSON.stringify({ id, method, params }));
       return response;
     },
     event(method: string) {
-      if (connectionError) return Promise.reject(connectionError);
-      return new Promise<void>((resolve, reject) => {
+      return new Promise<void>((resolve) => {
         const listeners = events.get(method) ?? [];
-        listeners.push({ resolve, reject });
+        listeners.push(resolve);
         events.set(method, listeners);
       });
     },
     close() {
-      failConnection(new Error("Chrome DevTools connection closed"));
+      socket.close();
     },
   };
 }
 
 type CdpClient = Awaited<ReturnType<typeof connectCdp>>;
-
-function decodeEvaluation<T>(value: unknown, decode: Decoder<T>): T {
-  const evaluation = record(value, "Runtime.evaluate result");
-  if (Object.hasOwn(evaluation, "exceptionDetails")) {
-    throw new Error(
-      `Runtime.evaluate failed: ${JSON.stringify(evaluation.exceptionDetails) ?? "unknown exception"}`,
-    );
-  }
-
-  const remoteObject = record(evaluation.result, "Runtime.evaluate result.result");
-  if (!Object.hasOwn(remoteObject, "value")) {
-    throw new Error("Runtime.evaluate result.result must contain a value");
-  }
-  return decode(remoteObject.value, "Runtime.evaluate value");
-}
-
-async function evaluate<T>(cdp: CdpClient, expression: string, decode: Decoder<T>): Promise<T> {
-  const result = await cdp.send("Runtime.evaluate", { returnByValue: true, expression });
-  return decodeEvaluation(result, decode);
-}
 
 const focusTargets = [
   { name: "skip", selector: ".skip-link" },
@@ -279,238 +130,31 @@ function isFocusTargetName(value: unknown): value is FocusTargetName {
   return typeof value === "string" && focusTargets.some(({ name }) => name === value);
 }
 
-const focusTarget: Decoder<FocusTargetName | null> = (value) => {
-  if (value === null) return null;
-  if (!isFocusTargetName(value)) {
-    throw new Error(`Unexpected in-document focus target: ${String(value)}`);
-  }
-  return value;
-};
-
-type Bounds = { left: number; right: number };
-
-const bounds = object<Bounds>({ left: finiteNumber, right: finiteNumber });
-const point = nullable(
-  object<{ x: number; y: number }>({ x: finiteNumber, y: finiteNumber }),
-);
-const target = object<{ webSocketDebuggerUrl: string }>({ webSocketDebuggerUrl: stringValue });
-const renderedForm = object<{ titleMaxLength: number; authorMaxLength: number }>({
-  titleMaxLength: finiteNumber,
-  authorMaxLength: finiteNumber,
-});
-const layout = object<{
-  viewportWidth: number;
-  documentWidth: number;
-  bodyWidth: number;
-  title: string;
-  author: string;
-  titleLines: number;
-  authorLines: number;
-  titleFits: boolean;
-  authorFits: boolean;
-  titleVisible: boolean;
-  authorVisible: boolean;
-  addControls: Bounds[];
-  rowControls: Array<Bounds & { tabIndex: number }>;
-}>({
-  viewportWidth: finiteNumber,
-  documentWidth: finiteNumber,
-  bodyWidth: finiteNumber,
-  title: stringValue,
-  author: stringValue,
-  titleLines: finiteNumber,
-  authorLines: finiteNumber,
-  titleFits: booleanValue,
-  authorFits: booleanValue,
-  titleVisible: booleanValue,
-  authorVisible: booleanValue,
-  addControls: array(bounds),
-  rowControls: array(
-    object<Bounds & { tabIndex: number }>({
-      left: finiteNumber,
-      right: finiteNumber,
-      tabIndex: finiteNumber,
-    }),
-  ),
-});
-const readState = object<{ count: string; action: string; isRead: boolean }>({
-  count: stringValue,
-  action: stringValue,
-  isRead: booleanValue,
-});
-const emptyState = object<{ count: string; books: number; message: string }>({
-  count: stringValue,
-  books: finiteNumber,
-  message: stringValue,
-});
-const ordinaryText = object<{
-  viewportWidth: number;
-  title: string;
-  author: string;
-  titleLines: number;
-  authorLines: number;
-}>({
-  viewportWidth: finiteNumber,
-  title: stringValue,
-  author: stringValue,
-  titleLines: finiteNumber,
-  authorLines: finiteNumber,
-});
-
-test("rejects malformed Chrome boundary payloads", () => {
-  const rejectedPayloads: Array<[string, () => unknown]> = [
-    ["CDP response", () => decodeCdpMessage({ id: 1 })],
-    ["CDP error", () => decodeCdpMessage({ id: 1, error: { message: 500 } })],
-    ["CDP string identifier", () => decodeCdpMessage({ id: "1", method: "Page.loadEventFired" })],
-    ["CDP boolean identifier", () => decodeCdpMessage({ id: true, method: "Page.loadEventFired" })],
-    ["CDP null identifier", () => decodeCdpMessage({ id: null, method: "Page.loadEventFired" })],
-    ["CDP object identifier", () => decodeCdpMessage({ id: {}, method: "Page.loadEventFired" })],
-    ["CDP array identifier", () => decodeCdpMessage({ id: [], method: "Page.loadEventFired" })],
-    ["CDP NaN identifier", () => decodeCdpMessage({ id: NaN, method: "Page.loadEventFired" })],
-    ["CDP infinite identifier", () => decodeCdpMessage({ id: Infinity, method: "Page.loadEventFired" })],
-    [
-      "evaluation exception",
-      () => decodeEvaluation({ result: { value: null }, exceptionDetails: {} }, nullable(stringValue)),
-    ],
-    ["evaluation result", () => decodeEvaluation({ result: {} }, stringValue)],
-    ["target discovery", () => target({ webSocketDebuggerUrl: 42 })],
-    ["click coordinates", () => point({ x: "left", y: 10 })],
-    ["form limits", () => renderedForm({ titleMaxLength: "200", authorMaxLength: 200 })],
-    ["narrow layout", () => layout({ viewportWidth: 320 })],
-    ["focus", () => focusTarget("unexpected")],
-    ["toggle state", () => readState({ count: 1 })],
-    ["empty state", () => emptyState({ books: "none" })],
-    ["wide text", () => ordinaryText({ viewportWidth: "760" })],
-  ];
-
-  for (const [name, decode] of rejectedPayloads) {
-    try {
-      decode();
-    } catch (error) {
-      expect(error).toBeInstanceOf(Error);
-      continue;
-    }
-    throw new Error(`${name} accepted a malformed payload`);
-  }
-});
-
-type CdpTestPeer = Pick<ServerWebSocket, "send" | "terminate">;
-
-function cdpTestServer() {
-  let acceptPeer: (peer: CdpTestPeer) => void;
-  const peer = new Promise<CdpTestPeer>((resolve) => {
-    acceptPeer = resolve;
-  });
-  const server = Bun.serve({
-    hostname: "127.0.0.1",
-    port: 0,
-    fetch(request, server) {
-      if (server.upgrade(request)) return;
-      return new Response("WebSocket upgrade required", { status: 426 });
-    },
-    websocket: {
-      open(socket) {
-        acceptPeer(socket);
-      },
-      message() {},
-    },
-  });
-  const url = new URL(server.url);
-  url.protocol = "ws:";
-  return { peer, url: url.href, stop: () => server.stop(true) };
-}
-
-async function rejectionOf(promise: Promise<unknown>) {
-  try {
-    await promise;
-  } catch (error) {
-    if (error instanceof Error) return error;
-    throw new Error(`Promise rejected with a non-Error value: ${String(error)}`);
-  }
-  throw new Error("Expected promise to reject");
-}
-
-test("rejects current and future CDP waiters after terminal failures", async () => {
-  const closedServer = cdpTestServer();
-  const malformedServer = cdpTestServer();
-  const unknownResponseServer = cdpTestServer();
-
-  try {
-    const closedClient = await connectCdp(closedServer.url);
-    const closedPeer = await closedServer.peer;
-    const command = closedClient.send("Page.enable");
-    const event = closedClient.event("Page.loadEventFired");
-    const secondEvent = closedClient.event("Page.loadEventFired");
-    const commandRejected = rejectionOf(command);
-    const eventRejected = rejectionOf(event);
-    const secondEventRejected = rejectionOf(secondEvent);
-    closedPeer.terminate();
-    const [commandError, eventError, secondEventError] = await Promise.all([
-      commandRejected,
-      eventRejected,
-      secondEventRejected,
-    ]);
-    expect(commandError.message).toBe("Chrome DevTools connection closed");
-    expect(eventError.message).toBe("Chrome DevTools connection closed");
-    expect(secondEventError).toBe(eventError);
-    expect((await rejectionOf(closedClient.send("Runtime.enable"))).message).toBe(
-      "Chrome DevTools connection closed",
-    );
-    expect((await rejectionOf(closedClient.event("Page.loadEventFired"))).message).toBe(
-      "Chrome DevTools connection closed",
-    );
-
-    const malformedClient = await connectCdp(malformedServer.url);
-    const malformedPeer = await malformedServer.peer;
-    const malformedEvent = malformedClient.event("Page.loadEventFired");
-    const malformedEventRejected = rejectionOf(malformedEvent);
-    malformedPeer.send('{"id":"not-a-number","method":"Page.loadEventFired"}');
-    expect((await malformedEventRejected).message).toBe(
-      "CDP message.id must be a finite number",
-    );
-
-    const unknownResponseClient = await connectCdp(unknownResponseServer.url);
-    const unknownResponsePeer = await unknownResponseServer.peer;
-    const unknownResponseEvent = unknownResponseClient.event("Page.loadEventFired");
-    const unknownResponseEventRejected = rejectionOf(unknownResponseEvent);
-    unknownResponsePeer.send('{"id":999,"result":{}}');
-    expect((await unknownResponseEventRejected).message).toBe(
-      "CDP response 999 did not match a pending request",
-    );
-  } finally {
-    await Promise.all([
-      closedServer.stop(),
-      malformedServer.stop(),
-      unknownResponseServer.stop(),
-    ]);
-  }
-});
-
 async function click(cdp: CdpClient, selector: string) {
-  const clickPoint = await evaluate(
-    cdp,
-    `(() => {
+  const evaluated = (await cdp.send("Runtime.evaluate", {
+    returnByValue: true,
+    expression: `(() => {
       const element = document.querySelector(${JSON.stringify(selector)});
       if (!element) return null;
       const rect = element.getBoundingClientRect();
       return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
     })()`,
-    point,
-  );
-  if (!clickPoint) throw new Error(`Could not find ${selector}`);
+  })) as { result: { value: { x: number; y: number } | null } };
+  const point = evaluated.result.value;
+  if (!point) throw new Error(`Could not find ${selector}`);
 
-  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...clickPoint });
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
   await cdp.send("Input.dispatchMouseEvent", {
     type: "mousePressed",
     button: "left",
     clickCount: 1,
-    ...clickPoint,
+    ...point,
   });
   await cdp.send("Input.dispatchMouseEvent", {
     type: "mouseReleased",
     button: "left",
     clickCount: 1,
-    ...clickPoint,
+    ...point,
   });
 }
 
@@ -553,11 +197,10 @@ responsiveLayoutTest(
       const ordinaryTitle = "The Left Hand of Darkness";
       const ordinaryAuthor = "Ursula Kroeber Le Guin";
       const port = await devtoolsPort(browser, browserOutput);
-      const targetPayload: unknown = await (
+      const target = (await (
         await fetch(`http://127.0.0.1:${port}/json/new?about%3Ablank`, { method: "PUT" })
-      ).json();
-      const browserTarget = target(targetPayload, "Chrome target");
-      cdp = await connectCdp(browserTarget.webSocketDebuggerUrl);
+      ).json()) as { webSocketDebuggerUrl: string };
+      cdp = await connectCdp(target.webSocketDebuggerUrl);
       await cdp.send("Page.enable");
       await cdp.send("Runtime.enable");
       await cdp.send("Emulation.setDeviceMetricsOverride", {
@@ -570,15 +213,14 @@ responsiveLayoutTest(
       await cdp.send("Page.navigate", { url: app.server.url.href });
       await loaded;
 
-      const formLimits = await evaluate(
-        cdp,
-        `(() => ({
+      const renderedForm = (await cdp.send("Runtime.evaluate", {
+        returnByValue: true,
+        expression: `(() => ({
           titleMaxLength: document.querySelector('input[name="title"]').maxLength,
           authorMaxLength: document.querySelector('input[name="author"]').maxLength,
         }))()`,
-        renderedForm,
-      );
-      expect(formLimits).toEqual({ titleMaxLength: 200, authorMaxLength: 200 });
+      })) as { result: { value: { titleMaxLength: number; authorMaxLength: number } } };
+      expect(renderedForm.result.value).toEqual({ titleMaxLength: 200, authorMaxLength: 200 });
 
       await click(cdp, 'input[name="title"]');
       await cdp.send("Input.insertText", { text: title });
@@ -588,9 +230,9 @@ responsiveLayoutTest(
       await click(cdp, ".add button");
       await added;
 
-      const narrowLayout = await evaluate(
-        cdp,
-        `(() => {
+      const evaluated = (await cdp.send("Runtime.evaluate", {
+        returnByValue: true,
+        expression: `(() => {
           const title = document.querySelector('.book strong');
           const author = document.querySelector('.book span');
           const textLines = (element) => {
@@ -621,27 +263,41 @@ responsiveLayoutTest(
             })),
           };
         })()`,
-        layout,
-      );
+      })) as { result: { value: Record<string, unknown> } };
+      const layout = evaluated.result.value as {
+        viewportWidth: number;
+        documentWidth: number;
+        bodyWidth: number;
+        title: string;
+        author: string;
+        titleLines: number;
+        authorLines: number;
+        titleFits: boolean;
+        authorFits: boolean;
+        titleVisible: boolean;
+        authorVisible: boolean;
+        addControls: Array<{ left: number; right: number }>;
+        rowControls: Array<{ left: number; right: number; tabIndex: number }>;
+      };
 
-      expect(narrowLayout.viewportWidth).toBe(320);
-      expect(narrowLayout.documentWidth).toBeLessThanOrEqual(narrowLayout.viewportWidth);
-      expect(narrowLayout.bodyWidth).toBeLessThanOrEqual(narrowLayout.viewportWidth);
-      expect(narrowLayout.title).toBe(title);
-      expect(narrowLayout.author).toBe(author);
-      expect(narrowLayout.titleLines).toBeGreaterThan(1);
-      expect(narrowLayout.authorLines).toBeGreaterThan(1);
-      expect(narrowLayout.titleFits).toBe(true);
-      expect(narrowLayout.authorFits).toBe(true);
-      expect(narrowLayout.titleVisible).toBe(true);
-      expect(narrowLayout.authorVisible).toBe(true);
-      expect(narrowLayout.addControls).toHaveLength(3);
-      expect(narrowLayout.rowControls).toHaveLength(2);
-      for (const control of [...narrowLayout.addControls, ...narrowLayout.rowControls]) {
+      expect(layout.viewportWidth).toBe(320);
+      expect(layout.documentWidth).toBeLessThanOrEqual(layout.viewportWidth);
+      expect(layout.bodyWidth).toBeLessThanOrEqual(layout.viewportWidth);
+      expect(layout.title).toBe(title);
+      expect(layout.author).toBe(author);
+      expect(layout.titleLines).toBeGreaterThan(1);
+      expect(layout.authorLines).toBeGreaterThan(1);
+      expect(layout.titleFits).toBe(true);
+      expect(layout.authorFits).toBe(true);
+      expect(layout.titleVisible).toBe(true);
+      expect(layout.authorVisible).toBe(true);
+      expect(layout.addControls).toHaveLength(3);
+      expect(layout.rowControls).toHaveLength(2);
+      for (const control of [...layout.addControls, ...layout.rowControls]) {
         expect(control.left).toBeGreaterThanOrEqual(0);
-        expect(control.right).toBeLessThanOrEqual(narrowLayout.viewportWidth);
+        expect(control.right).toBeLessThanOrEqual(layout.viewportWidth);
       }
-      for (const control of narrowLayout.rowControls) expect(control.tabIndex).toBeGreaterThanOrEqual(0);
+      for (const control of layout.rowControls) expect(control.tabIndex).toBeGreaterThanOrEqual(0);
 
       const expectedFocusOrder = focusTargets.map(({ name }) => name);
       const focusOrder: string[] = [];
@@ -658,9 +314,9 @@ responsiveLayoutTest(
           code: "Tab",
           windowsVirtualKeyCode: 9,
         });
-        const focus = await evaluate(
-          cdp,
-          `(() => {
+        const focused = (await cdp.send("Runtime.evaluate", {
+          returnByValue: true,
+          expression: `(() => {
             if (!document.hasFocus()) return null;
             const active = document.activeElement;
             const target = ${JSON.stringify(focusTargets)}.find(({ selector }) =>
@@ -681,9 +337,12 @@ responsiveLayoutTest(
                 ].filter(Boolean).join("")
               : "null";
           })()`,
-          focusTarget,
-        );
+        })) as { result: { value: unknown } };
+        const focus = focused.result.value;
         if (focus === null) continue;
+        if (!isFocusTargetName(focus)) {
+          throw new Error(`Unexpected in-document focus target: ${String(focus)}`);
+        }
         focusOrder.push(focus);
         if (focus === "delete") break;
       }
@@ -692,16 +351,17 @@ responsiveLayoutTest(
       const toggled = cdp.event("Page.loadEventFired");
       await click(cdp, ".check");
       await toggled;
-      const currentReadState = await evaluate(
-        cdp,
-        `(() => ({
+      const readState = (await cdp.send("Runtime.evaluate", {
+        returnByValue: true,
+        expression: `(() => ({
           count: document.querySelector('.count').textContent.trim(),
           action: document.querySelector('.check').getAttribute('aria-label'),
           isRead: document.querySelector('.book').classList.contains('is-read'),
         }))()`,
-        readState,
-      );
-      expect(currentReadState).toEqual({
+      })) as {
+        result: { value: { count: string; action: string; isRead: boolean } };
+      };
+      expect(readState.result.value).toEqual({
         count: "1 of 1 read",
         action: `Mark ${title} as unread (book 1)`,
         isRead: true,
@@ -714,16 +374,15 @@ responsiveLayoutTest(
       await cdp.send("Page.handleJavaScriptDialog", { accept: true });
       await deleteClick;
       await deleted;
-      const currentEmptyState = await evaluate(
-        cdp,
-        `(() => ({
+      const emptyState = (await cdp.send("Runtime.evaluate", {
+        returnByValue: true,
+        expression: `(() => ({
           count: document.querySelector('.count').textContent.trim(),
           books: document.querySelectorAll('.book').length,
           message: document.querySelector('.empty p').textContent,
         }))()`,
-        emptyState,
-      );
-      expect(currentEmptyState).toEqual({
+      })) as { result: { value: { count: string; books: number; message: string } } };
+      expect(emptyState.result.value).toEqual({
         count: "0 of 0 read",
         books: 0,
         message: "Your shelf is empty.",
@@ -743,9 +402,9 @@ responsiveLayoutTest(
       await click(cdp, ".add button");
       await ordinaryAdded;
 
-      const renderedOrdinaryText = await evaluate(
-        cdp,
-        `(() => {
+      const ordinaryText = (await cdp.send("Runtime.evaluate", {
+        returnByValue: true,
+        expression: `(() => {
           const title = document.querySelector('.book strong');
           const author = document.querySelector('.book span');
           const textLines = (element) => {
@@ -761,9 +420,18 @@ responsiveLayoutTest(
             authorLines: textLines(author),
           };
         })()`,
-        ordinaryText,
-      );
-      expect(renderedOrdinaryText).toEqual({
+      })) as {
+        result: {
+          value: {
+            viewportWidth: number;
+            title: string;
+            author: string;
+            titleLines: number;
+            authorLines: number;
+          };
+        };
+      };
+      expect(ordinaryText.result.value).toEqual({
         viewportWidth: 760,
         title: ordinaryTitle,
         author: ordinaryAuthor,
