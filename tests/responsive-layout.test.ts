@@ -138,6 +138,41 @@ type FocusObservation =
   | { kind: (typeof focusObservationKinds)["outsideDocument"] }
   | { kind: (typeof focusObservationKinds)["unexpected"]; identity: string };
 
+type FocusableElement = Pick<
+  Element,
+  "className" | "getAttribute" | "hasAttribute" | "id" | "matches" | "tagName"
+>;
+
+function observeFocus(
+  documentHasFocus: boolean,
+  active: FocusableElement | null,
+  targets: typeof focusTargets,
+  observationKinds: typeof focusObservationKinds,
+): FocusObservation {
+  if (!documentHasFocus) return { kind: observationKinds.outsideDocument };
+
+  const target = targets.find(({ selector }) => active?.matches(selector));
+  if (target) return { kind: observationKinds.application, name: target.name };
+
+  const attributes = active
+    ? ["name", "type", "href", "aria-label"]
+        .filter((name) => active.hasAttribute(name))
+        .map((name) => `[${name}=${JSON.stringify(active.getAttribute(name))}]`)
+        .join("")
+    : "";
+  const identity = active
+    ? [
+        active.tagName.toLowerCase(),
+        active.id && `#${active.id}`,
+        active.className && `.${String(active.className).trim().replaceAll(" ", ".")}`,
+        attributes,
+      ]
+        .filter(Boolean)
+        .join("")
+    : "null";
+  return { kind: observationKinds.unexpected, identity };
+}
+
 function hasExactKeys(value: Record<string, unknown>, keys: string[]) {
   const actualKeys = Object.keys(value);
   return actualKeys.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
@@ -174,14 +209,34 @@ function parseFocusObservation(value: unknown): FocusObservation {
   throw new Error(`Invalid focus observation: ${JSON.stringify(value)}`);
 }
 
-test("validates focus observations received from Chrome", () => {
-  const validObservations: FocusObservation[] = [
+test("produces and validates focus observations received from Chrome", () => {
+  const element = (
+    matchingSelector: string | undefined,
+    attributes: Record<string, string> = {},
+  ): FocusableElement => ({
+    tagName: matchingSelector ? "INPUT" : "A",
+    id: matchingSelector ? "" : "books",
+    className: matchingSelector ? "" : "jump link",
+    matches: (selector) => selector === matchingSelector,
+    hasAttribute: (name) => Object.hasOwn(attributes, name),
+    getAttribute: (name) => attributes[name] ?? null,
+  });
+
+  const expectedObservations: FocusObservation[] = [
     { kind: focusObservationKinds.application, name: "title" },
     { kind: focusObservationKinds.outsideDocument },
-    { kind: focusObservationKinds.unexpected, identity: "a[href=\"#books\"]" },
+    {
+      kind: focusObservationKinds.unexpected,
+      identity: 'a#books.jump.link[href="#books"]',
+    },
   ];
-  for (const observation of validObservations) {
-    expect(parseFocusObservation(observation)).toEqual(observation);
+  const producedObservations = [
+    observeFocus(true, element('input[name="title"]'), focusTargets, focusObservationKinds),
+    observeFocus(false, null, focusTargets, focusObservationKinds),
+    observeFocus(true, element(undefined, { href: "#books" }), focusTargets, focusObservationKinds),
+  ];
+  for (let index = 0; index < expectedObservations.length; index += 1) {
+    expect(parseFocusObservation(producedObservations[index])).toEqual(expectedObservations[index]);
   }
 
   const invalidObservations: unknown[] = [
@@ -372,25 +427,12 @@ test(
         });
         const focused = (await cdp.send("Runtime.evaluate", {
           returnByValue: true,
-          expression: `(() => {
-            const observationKinds = ${JSON.stringify(focusObservationKinds)};
-            if (!document.hasFocus()) return { kind: observationKinds.outsideDocument };
-            const active = document.activeElement;
-            const target = ${JSON.stringify(focusTargets)}.find(({ selector }) => active?.matches(selector));
-            if (target) return { kind: observationKinds.application, name: target.name };
-            const attributes = active
-              ? ['name', 'type', 'href', 'aria-label']
-                  .filter((name) => active.hasAttribute(name))
-                  .map((name) => '[' + name + '=' + JSON.stringify(active.getAttribute(name)) + ']')
-                  .join('')
-              : '';
-            const identity = active
-              ? [active.tagName.toLowerCase(), active.id && '#' + active.id, active.className && '.' + String(active.className).trim().replaceAll(' ', '.'), attributes]
-                  .filter(Boolean)
-                  .join('')
-              : 'null';
-            return { kind: observationKinds.unexpected, identity };
-          })()`,
+          expression: `(${observeFocus.toString()})(
+            document.hasFocus(),
+            document.activeElement,
+            ${JSON.stringify(focusTargets)},
+            ${JSON.stringify(focusObservationKinds)}
+          )`,
         })) as { result: { value: unknown } };
         const observation = parseFocusObservation(focused.result.value);
         if (observation.kind === focusObservationKinds.outsideDocument) continue;
