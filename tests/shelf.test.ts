@@ -50,8 +50,16 @@ describe("HTTP routes", () => {
     let response = await fetch(base);
     let body = await response.text();
     expect(body).toContain("<b>0</b> of 0 read");
-    expect(body).toContain('<input name="title" required maxlength="200"');
-    expect(body).toContain('<input name="author" required maxlength="200"');
+    expect(body).toContain(
+      '<p class="add-guidance" id="book-field-guidance">Title and author can each be up to 200 characters after trimming.</p>',
+    );
+    expect(body).toContain(
+      '<input name="title" required aria-describedby="book-field-guidance"',
+    );
+    expect(body).toContain(
+      '<input name="author" required aria-describedby="book-field-guidance"',
+    );
+    expect(body).not.toMatch(/\bmaxlength\s*=/i);
 
     response = await addBook("Kindred", "Octavia E. Butler");
     expect(response.status).toBe(303);
