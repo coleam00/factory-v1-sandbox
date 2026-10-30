@@ -1,23 +1,26 @@
 import { Database } from "bun:sqlite";
 
 const sqliteIntegerMax = "9223372036854775807";
+const sqliteIntegerMinMagnitude = "9223372036854775808";
 declare const bookIdBrand: unique symbol;
 
 export type BookId = string & { readonly [bookIdBrand]: true };
 
 export function parseBookId(value: string): BookId | null {
-  if (!/^\d+$/.test(value)) return null;
+  const match = value.match(/^(-?)(\d+)$/);
+  if (match === null) return null;
 
-  const canonical = value.replace(/^0+/, "");
+  const magnitude = match[2].replace(/^0+/, "") || "0";
+  const negative = match[1] === "-" && magnitude !== "0";
+  const limit = negative ? sqliteIntegerMinMagnitude : sqliteIntegerMax;
   if (
-    canonical.length === 0 ||
-    canonical.length > sqliteIntegerMax.length ||
-    (canonical.length === sqliteIntegerMax.length && canonical > sqliteIntegerMax)
+    magnitude.length > limit.length ||
+    (magnitude.length === limit.length && magnitude > limit)
   ) {
     return null;
   }
 
-  return canonical as BookId;
+  return `${negative ? "-" : ""}${magnitude}` as BookId;
 }
 
 export type Book = {

@@ -145,13 +145,49 @@ describe("database", () => {
     }
   });
 
-  test("parses only positive SQLite integer identities", () => {
+  test("parses canonical SQLite integer identities", () => {
     const maxId = "9223372036854775807";
+    const minId = "-9223372036854775808";
 
     expect(parseBookId("0001")).toBe("1");
+    expect(parseBookId("0000")).toBe("0");
+    expect(parseBookId("-0001")).toBe("-1");
     expect(parseBookId(maxId)).toBe(maxId);
-    for (const invalid of ["0", "-1", "1.0", "1e0", "9223372036854775808"]) {
+    expect(parseBookId(minId)).toBe(minId);
+    for (const invalid of [
+      "1.0",
+      "1e0",
+      "+1",
+      "9223372036854775808",
+      "-9223372036854775809",
+    ]) {
       expect(parseBookId(invalid)).toBeNull();
+    }
+  });
+
+  test("lists zero and negative SQLite integer identities", () => {
+    const directory = mkdtempSync(join(tmpdir(), "shelf-test-"));
+    const dbPath = join(directory, "shelf.db");
+    const db = openShelf(dbPath);
+    const inspectionDb = new Database(dbPath);
+
+    try {
+      const insert = inspectionDb.query(
+        "INSERT INTO books (id, title, author) VALUES (?, ?, ?)",
+      );
+      insert.run(0, "Zero", "Exact ID");
+      insert.run(-1, "Negative", "Exact ID");
+      insert.run(-9223372036854775808n, "Minimum", "Exact ID");
+
+      expect(db.list().map((book) => book.id)).toEqual([
+        "0",
+        "-1",
+        "-9223372036854775808",
+      ]);
+    } finally {
+      inspectionDb.close();
+      db.close();
+      rmSync(directory, { recursive: true, force: true });
     }
   });
 
@@ -249,6 +285,46 @@ describe("HTTP routes", () => {
   });
 
   for (const action of ["toggle", "delete"] as const) {
+    test(`${action} preserves the existing zero-ID success flow`, async () => {
+      const directory = mkdtempSync(join(tmpdir(), "shelf-test-"));
+      const dbPath = join(directory, "shelf.db");
+      const isolatedApp = startServer({ port: 0, dbPath });
+      const inspectionDb = new Database(dbPath);
+
+      try {
+        const insert = inspectionDb.query(
+          "INSERT INTO books (id, title, author) VALUES (?, ?, ?)",
+        );
+        insert.run(0, "Zero", "Target");
+        insert.run(1, "Control", "Must Not Change");
+
+        const response = await fetch(`${isolatedApp.server.url}books/0/${action}`, {
+          method: "POST",
+          redirect: "manual",
+        });
+        expect(response.status).toBe(303);
+        expect(response.headers.get("location")).toBe("/");
+
+        const rows = inspectionDb
+          .query<{ id: string; read: number }, []>(
+            "SELECT CAST(id AS TEXT) AS id, read FROM books ORDER BY id",
+          )
+          .all();
+        expect(rows).toEqual(
+          action === "toggle"
+            ? [
+                { id: "0", read: 1 },
+                { id: "1", read: 0 },
+              ]
+            : [{ id: "1", read: 0 }],
+        );
+      } finally {
+        inspectionDb.close();
+        isolatedApp.close();
+        rmSync(directory, { recursive: true, force: true });
+      }
+    });
+
     test(`${action} preserves exact numeric IDs and reports missing books`, async () => {
       const directory = mkdtempSync(join(tmpdir(), "shelf-test-"));
       const dbPath = join(directory, "shelf.db");
