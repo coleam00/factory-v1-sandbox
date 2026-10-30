@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { openShelf } from "../src/db";
+import { bookId, openShelf } from "../src/db";
 import { startServer } from "../src/server";
 
 function expectEmptyShelf(html: string) {
@@ -113,6 +113,13 @@ test("structural reader excludes inert template endpoints and label text", async
 });
 
 describe("database", () => {
+  test("accepts only signed SQLite integer IDs", () => {
+    expect(bookId(-9223372036854775808n)).toBe(-9223372036854775808n);
+    expect(bookId(9223372036854775807n)).toBe(9223372036854775807n);
+    expect(bookId(-9223372036854775809n)).toBeNull();
+    expect(bookId(9223372036854775808n)).toBeNull();
+  });
+
   test("adds, lists, toggles, and deletes books", () => {
     const db = openShelf(":memory:");
     const id = db.add("Dune", "Frank Herbert");

@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Book } from "../src/db";
-import { openShelf } from "../src/db";
+import { bookId, openShelf } from "../src/db";
 import { startServer } from "../src/server";
 import { page } from "../src/views";
 
@@ -158,7 +158,15 @@ function renderedBook(html: string, title: string) {
 }
 
 function book(id: bigint, title: string, read = false): Book {
-  return { id, title, author: "Test Author", read, createdAt: "2026-01-01 00:00:00" };
+  const checkedId = bookId(id);
+  if (checkedId === null) throw new Error(`Invalid test book ID: ${id}`);
+  return {
+    id: checkedId,
+    title,
+    author: "Test Author",
+    read,
+    createdAt: "2026-01-01 00:00:00",
+  };
 }
 
 function deferred<T>() {
@@ -212,7 +220,8 @@ function serverBackedClient(
 ) {
   return clientHarness(initialPage, async (url, options) => {
     requests.push(url);
-    return fetch(new URL(new URL(url).pathname, app.server.url), {
+    const requestUrl = new URL(url);
+    return fetch(new URL(`${requestUrl.pathname}${requestUrl.search}`, app.server.url), {
       method: options.method,
       body: options.body,
     });
@@ -545,7 +554,11 @@ describe("browser shelf mutations", () => {
   test("toggles a rendered book in place", async () => {
     const app = startServer({ port: 0, dbPath: ":memory:" });
     try {
-      const initialPage = await addServerBook(app);
+      await addServerBook(app);
+      const activeView = "filter=all&order=title";
+      const initialPage = await (
+        await fetch(new URL(`/?${activeView}`, app.server.url))
+      ).text();
       const requests: string[] = [];
       const client = serverBackedClient(initialPage, app, requests);
       const event = new TestSubmitEvent(renderedMutationForm(initialPage, "toggle"));
@@ -553,11 +566,12 @@ describe("browser shelf mutations", () => {
       await client.submit(event);
 
       expect(event.defaultPrevented).toBe(true);
-      expect(requests).toEqual([`${origin}${defaultAction("/books/1/toggle")}`]);
+      expect(requests).toEqual([`${origin}/books/1/toggle?${activeView}`]);
       expect(client.reloads()).toBe(0);
       expect(client.document.currentMain.markup).toContain('class="book is-read"');
       expect(client.document.currentMain.markup).toContain('<b>1</b> of 1 read');
       expect(client.document.currentMain.markup).toContain('aria-label="Mark unread"');
+      expect(client.document.currentMain.markup).toContain('<option value="title" selected>');
     } finally {
       app.close();
     }
