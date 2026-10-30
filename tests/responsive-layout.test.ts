@@ -115,6 +115,7 @@ async function connectCdp(url: string) {
 type CdpClient = Awaited<ReturnType<typeof connectCdp>>;
 
 const focusTargets = [
+  { name: "skip", selector: ".skip-link" },
   { name: "title", selector: 'input[name="title"]' },
   { name: "author", selector: 'input[name="author"]' },
   { name: "add", selector: ".add button" },
@@ -125,134 +126,11 @@ const focusTargets = [
   { name: "delete", selector: ".delete" },
 ] as const;
 
-const focusObservationKinds = {
-  application: "application",
-  outsideDocument: "outside-document",
-  unexpected: "unexpected",
-} as const;
-
 type FocusTargetName = (typeof focusTargets)[number]["name"];
-
-type FocusObservation =
-  | { kind: (typeof focusObservationKinds)["application"]; name: FocusTargetName }
-  | { kind: (typeof focusObservationKinds)["outsideDocument"] }
-  | { kind: (typeof focusObservationKinds)["unexpected"]; identity: string };
-
-type FocusableElement = Pick<
-  Element,
-  "className" | "getAttribute" | "hasAttribute" | "id" | "matches" | "tagName"
->;
-
-function observeFocus(
-  documentHasFocus: boolean,
-  active: FocusableElement | null,
-  targets: typeof focusTargets,
-  observationKinds: typeof focusObservationKinds,
-): FocusObservation {
-  if (!documentHasFocus) return { kind: observationKinds.outsideDocument };
-
-  const target = targets.find(({ selector }) => active?.matches(selector));
-  if (target) return { kind: observationKinds.application, name: target.name };
-
-  const attributes = active
-    ? ["name", "type", "href", "aria-label"]
-        .filter((name) => active.hasAttribute(name))
-        .map((name) => `[${name}=${JSON.stringify(active.getAttribute(name))}]`)
-        .join("")
-    : "";
-  const identity = active
-    ? [
-        active.tagName.toLowerCase(),
-        active.id && `#${active.id}`,
-        active.className && `.${String(active.className).trim().replaceAll(" ", ".")}`,
-        attributes,
-      ]
-        .filter(Boolean)
-        .join("")
-    : "null";
-  return { kind: observationKinds.unexpected, identity };
-}
-
-function hasExactKeys(value: Record<string, unknown>, keys: string[]) {
-  const actualKeys = Object.keys(value);
-  return actualKeys.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
-}
 
 function isFocusTargetName(value: unknown): value is FocusTargetName {
   return typeof value === "string" && focusTargets.some(({ name }) => name === value);
 }
-
-function parseFocusObservation(value: unknown): FocusObservation {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Invalid focus observation: ${JSON.stringify(value)}`);
-  }
-
-  const observation = value as Record<string, unknown>;
-  switch (observation.kind) {
-    case focusObservationKinds.application:
-      if (hasExactKeys(observation, ["kind", "name"]) && isFocusTargetName(observation.name)) {
-        return { kind: focusObservationKinds.application, name: observation.name };
-      }
-      break;
-    case focusObservationKinds.outsideDocument:
-      if (hasExactKeys(observation, ["kind"])) {
-        return { kind: focusObservationKinds.outsideDocument };
-      }
-      break;
-    case focusObservationKinds.unexpected:
-      if (hasExactKeys(observation, ["kind", "identity"]) && typeof observation.identity === "string") {
-        return { kind: focusObservationKinds.unexpected, identity: observation.identity };
-      }
-      break;
-  }
-
-  throw new Error(`Invalid focus observation: ${JSON.stringify(value)}`);
-}
-
-test("produces and validates focus observations received from Chrome", () => {
-  const element = (
-    matchingSelector: string | undefined,
-    attributes: Record<string, string> = {},
-  ): FocusableElement => ({
-    tagName: matchingSelector ? "INPUT" : "A",
-    id: matchingSelector ? "" : "books",
-    className: matchingSelector ? "" : "jump link",
-    matches: (selector) => selector === matchingSelector,
-    hasAttribute: (name) => Object.hasOwn(attributes, name),
-    getAttribute: (name) => attributes[name] ?? null,
-  });
-
-  const expectedObservations: FocusObservation[] = [
-    { kind: focusObservationKinds.application, name: "title" },
-    { kind: focusObservationKinds.outsideDocument },
-    {
-      kind: focusObservationKinds.unexpected,
-      identity: 'a#books.jump.link[href="#books"]',
-    },
-  ];
-  const producedObservations = [
-    observeFocus(true, element('input[name="title"]'), focusTargets, focusObservationKinds),
-    observeFocus(false, null, focusTargets, focusObservationKinds),
-    observeFocus(true, element(undefined, { href: "#books" }), focusTargets, focusObservationKinds),
-  ];
-  for (let index = 0; index < expectedObservations.length; index += 1) {
-    expect(parseFocusObservation(producedObservations[index])).toEqual(expectedObservations[index]);
-  }
-
-  const invalidObservations: unknown[] = [
-    null,
-    { kind: "expected", name: "title" },
-    { kind: focusObservationKinds.application },
-    { kind: focusObservationKinds.application, name: "missing" },
-    { kind: focusObservationKinds.application, name: "title", identity: "extra" },
-    { kind: focusObservationKinds.outsideDocument, name: "title" },
-    { kind: focusObservationKinds.unexpected },
-    { kind: focusObservationKinds.unexpected, identity: 42 },
-  ];
-  for (const observation of invalidObservations) {
-    expect(() => parseFocusObservation(observation)).toThrow("Invalid focus observation");
-  }
-});
 
 async function click(cdp: CdpClient, selector: string) {
   const evaluated = (await cdp.send("Runtime.evaluate", {
@@ -427,20 +305,35 @@ test(
         });
         const focused = (await cdp.send("Runtime.evaluate", {
           returnByValue: true,
-          expression: `(${observeFocus.toString()})(
-            document.hasFocus(),
-            document.activeElement,
-            ${JSON.stringify(focusTargets)},
-            ${JSON.stringify(focusObservationKinds)}
-          )`,
+          expression: `(() => {
+            if (!document.hasFocus()) return null;
+            const active = document.activeElement;
+            const target = ${JSON.stringify(focusTargets)}.find(({ selector }) =>
+              active?.matches(selector)
+            );
+            if (target) return target.name;
+
+            const attributes = ["name", "type", "href", "aria-label"]
+              .filter((name) => active?.hasAttribute(name))
+              .map((name) => "[" + name + "=" + JSON.stringify(active?.getAttribute(name)) + "]")
+              .join("");
+            return active
+              ? [
+                  active.tagName.toLowerCase(),
+                  active.id && "#" + active.id,
+                  active.className && "." + String(active.className).trim().replaceAll(" ", "."),
+                  attributes,
+                ].filter(Boolean).join("")
+              : "null";
+          })()`,
         })) as { result: { value: unknown } };
-        const observation = parseFocusObservation(focused.result.value);
-        if (observation.kind === focusObservationKinds.outsideDocument) continue;
-        if (observation.kind === focusObservationKinds.unexpected) {
-          throw new Error(`Unexpected in-document focus target: ${observation.identity}`);
+        const focus = focused.result.value;
+        if (focus === null) continue;
+        if (!isFocusTargetName(focus)) {
+          throw new Error(`Unexpected in-document focus target: ${String(focus)}`);
         }
-        focusOrder.push(observation.name);
-        if (observation.name === "delete") break;
+        focusOrder.push(focus);
+        if (focus === "delete") break;
       }
       expect(focusOrder).toEqual(expectedFocusOrder);
 
