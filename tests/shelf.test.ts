@@ -150,6 +150,43 @@ describe("HTTP routes", () => {
     expect((await fetch(base)).status).toBe(200);
   });
 
+  test("toggles a book at SQLite's maximum id", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "shelf-maximum-book-id-"));
+    const dbPath = join(directory, "shelf.db");
+    const maximumId = 9223372036854775807n;
+    const shelf = openShelf(dbPath);
+    shelf.close();
+
+    const seed = new Database(dbPath, { safeIntegers: true });
+    seed.query("INSERT INTO books (id, title, author) VALUES (?, ?, ?)")
+      .run(maximumId, "Maximum Book", "Boundary Author");
+    seed.close();
+
+    const maximumIdApp = startServer({ port: 0, dbPath });
+    const maximumIdBase = maximumIdApp.server.url.origin;
+
+    try {
+      let body = await (await fetch(maximumIdBase)).text();
+      expect(ariaLabel(toggleForm(body, maximumId))).toBe(
+        `Mark Maximum Book as read (book ${maximumId})`,
+      );
+
+      const response = await fetch(`${maximumIdBase}/books/${maximumId}/toggle`, {
+        method: "POST",
+        redirect: "manual",
+      });
+      expect(response.status).toBe(303);
+
+      body = await (await fetch(maximumIdBase)).text();
+      expect(ariaLabel(toggleForm(body, maximumId))).toBe(
+        `Mark Maximum Book as unread (book ${maximumId})`,
+      );
+    } finally {
+      maximumIdApp.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test("returns 404 without changing the shelf when a book is missing", async () => {
     const app = startServer({ port: 0, dbPath: ":memory:" });
     const base = app.server.url.origin;
