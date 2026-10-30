@@ -481,13 +481,12 @@ describe("JSON export", () => {
     const longTitle = `Z${" title".repeat(40)}`;
     const longAuthor = `Z${" author".repeat(35)}`;
     const shelf = openShelf(dbPath);
-    const lowerId = shelf.add(longTitle, longAuthor);
     shelf.close();
 
     const seed = new Database(dbPath, { safeIntegers: true });
-    seed
-      .query("INSERT INTO books (id, title, author) VALUES (?, ?, ?)")
-      .run(10n, "A title", "A author");
+    const insert = seed.query("INSERT INTO books (id, title, author) VALUES (?, ?, ?)");
+    insert.run(2n, longTitle, longAuthor);
+    insert.run(10n, "A title", "A author");
     seed.close();
 
     const app = startServer({ port: 0, dbPath });
@@ -499,7 +498,7 @@ describe("JSON export", () => {
         author: string;
       }>;
 
-      expect(books.map(({ id }) => id)).toEqual([Number(lowerId), 10]);
+      expect(books.map(({ id }) => id)).toEqual([2, 10]);
       expect(books[0]?.title).toBe(longTitle);
       expect(books[0]?.author).toBe(longAuthor);
     } finally {
@@ -547,7 +546,9 @@ describe("JSON export", () => {
     const app = startServer({ port: 0, dbPath });
     const base = app.server.url.origin;
     try {
-      const pageBody = await (await fetch(base)).text();
+      const pageResponse = await fetch(base);
+      expect(pageResponse.headers.get("content-disposition")).toBeNull();
+      const pageBody = await pageResponse.text();
       expect(pageBody.indexOf(second.title)).toBeLessThan(pageBody.indexOf("A &lt;Shelf&gt;"));
       expect(pageBody).toContain(`/books/${first.id}/toggle`);
       expect(pageBody).toContain(`/books/${second.id}/delete`);
