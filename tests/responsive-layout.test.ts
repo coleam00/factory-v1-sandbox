@@ -403,20 +403,39 @@ responsiveLayoutTest(
 
       const rowControlVisibility = (await cdp.send("Runtime.evaluate", {
         returnByValue: true,
-        expression: `([...document.querySelectorAll('.book button')].map((element) => {
-          const rect = element.getBoundingClientRect();
-          const center = document.elementFromPoint(
-            rect.left + rect.width / 2,
-            rect.top + rect.height / 2,
-          );
-          return {
-            top: rect.top,
-            bottom: rect.bottom,
-            visible:
-              element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) &&
-              rect.width > 0 && rect.height > 0 && element.contains(center),
+        expression: `(() => {
+          const fullyInsideClippingAncestors = (element, rect) => {
+            for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+              const style = getComputedStyle(ancestor);
+              if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+              const ancestorRect = ancestor.getBoundingClientRect();
+              const clipLeft = ancestorRect.left + ancestor.clientLeft;
+              const clipTop = ancestorRect.top + ancestor.clientTop;
+              if (style.overflowX !== "visible" &&
+                  (rect.left < clipLeft || rect.right > clipLeft + ancestor.clientWidth)) return false;
+              if (style.overflowY !== "visible" &&
+                  (rect.top < clipTop || rect.bottom > clipTop + ancestor.clientHeight)) return false;
+            }
+            return true;
           };
-        }))`,
+          const ownsInsetPoints = (element, rect) => [0.2, 0.5, 0.8].every((x) =>
+            [0.2, 0.5, 0.8].every((y) => element.contains(document.elementFromPoint(
+              rect.left + rect.width * x,
+              rect.top + rect.height * y,
+            )))
+          );
+          return [...document.querySelectorAll('.book button')].map((element) => {
+            const rect = element.getBoundingClientRect();
+            return {
+              top: rect.top,
+              bottom: rect.bottom,
+              visible:
+                element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) &&
+                rect.width > 0 && rect.height > 0 &&
+                fullyInsideClippingAncestors(element, rect) && ownsInsetPoints(element, rect),
+            };
+          });
+        })()`,
       })) as {
         result: { value: Array<{ top: number; bottom: number; visible: boolean }> };
       };
