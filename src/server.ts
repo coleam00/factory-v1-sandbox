@@ -16,35 +16,21 @@ type BookFormResult =
   | { book: { title: string; author: string } }
   | { error: string };
 
-const readBookField = (
-  form: FormData,
-  field: (typeof bookFields)[keyof typeof bookFields],
-) => {
-  const entries = form.getAll(field.name);
-  if (entries.length === 0) return { value: "" } as const;
-  if (entries.length !== 1 || typeof entries[0] !== "string") {
-    return { error: `${field.label} must be submitted exactly once as text.` } as const;
-  }
-  return { value: entries[0].trim() } as const;
-};
-
 const decodeBookForm = (form: FormData): BookFormResult => {
-  const title = readBookField(form, bookFields.title);
-  if ("error" in title) return title;
-  const author = readBookField(form, bookFields.author);
-  if ("error" in author) return author;
+  const title = String(form.get(bookFields.title.name) ?? "").trim();
+  const author = String(form.get(bookFields.author.name) ?? "").trim();
 
-  if (!title.value || !author.value) {
+  if (!title || !author) {
     return { error: "Title and author are required." };
   }
-  if (codePointLength(title.value) > maxBookFieldLength) {
+  if (codePointLength(title) > maxBookFieldLength) {
     return { error: `Title must be ${maxBookFieldLength} characters or fewer.` };
   }
-  if (codePointLength(author.value) > maxBookFieldLength) {
+  if (codePointLength(author) > maxBookFieldLength) {
     return { error: `Author must be ${maxBookFieldLength} characters or fewer.` };
   }
 
-  return { book: { title: title.value, author: author.value } };
+  return { book: { title, author } };
 };
 
 export function startServer(options: { port?: number; dbPath?: string } = {}) {
