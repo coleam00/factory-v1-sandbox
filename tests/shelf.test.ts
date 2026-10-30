@@ -241,7 +241,7 @@ describe("HTTP routes", () => {
     expect((await fetch(`${base}/missing`)).status).toBe(404);
   });
 
-  test("redirects mutation requests with ids outside SQLite's range", async () => {
+  test("returns 404 for mutation requests with ids outside SQLite's range", async () => {
     const firstExcludedId = 9223372036854775808n;
 
     for (const action of ["toggle", "delete"] as const) {
@@ -249,7 +249,8 @@ describe("HTTP routes", () => {
         method: "POST",
         redirect: "manual",
       });
-      expect(response.status).toBe(303);
+      expect(response.status).toBe(404);
+      expect(await response.text()).toContain("Book not found.");
     }
 
     expect((await fetch(base)).status).toBe(200);
@@ -394,10 +395,14 @@ describe("HTTP routes", () => {
       expect(ariaLabel(toggleForm(body, firstId))).toContain(" as read ");
       expect(ariaLabel(toggleForm(body, secondId))).toContain(" as unread ");
 
-      await fetch(`${boundaryBase}/books/${firstId}/delete`, { method: "POST" });
+      const deleteResponse = await fetch(`${boundaryBase}/books/${secondId}/delete`, {
+        method: "POST",
+        redirect: "manual",
+      });
+      expect(deleteResponse.status).toBe(303);
       body = await (await fetch(boundaryBase)).text();
-      expect(body).not.toContain(`/books/${firstId}/toggle`);
-      expect(ariaLabel(toggleForm(body, secondId))).toContain(" as unread ");
+      expect(body).not.toContain(`/books/${secondId}/toggle`);
+      expect(ariaLabel(toggleForm(body, firstId))).toContain(" as read ");
     } finally {
       boundaryApp.close();
       rmSync(directory, { recursive: true, force: true });
