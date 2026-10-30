@@ -1,9 +1,10 @@
 import { join } from "node:path";
-import { openShelf, parseBookId } from "./db";
+import { openShelf } from "./db";
 import { parseView, viewLocation } from "./view-state";
 import { page } from "./views";
 
 const publicDir = join(import.meta.dir, "..", "public");
+const maximumBookId = 9223372036854775807n;
 const html = (body: string, status = 200) =>
   new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8" } });
 const redirect = (location: string) => Response.redirect(location, 303);
@@ -39,9 +40,9 @@ export function startServer(options: { port?: number; dbPath?: string } = {}) {
 
       const match = url.pathname.match(/^\/books\/(\d+)\/(toggle|delete)$/);
       if (request.method === "POST" && match) {
-        const id = parseBookId(match[1]);
-        const changed =
-          id !== null && (match[2] === "toggle" ? shelf.toggle(id) : shelf.remove(id));
+        const id = BigInt(match[1]);
+        const changed = id <= maximumBookId
+          && (match[2] === "toggle" ? shelf.toggle(id) : shelf.remove(id));
         if (!changed) return html(page(shelf.list(), view, "Book not found."), 404);
         return redirect(viewLocation(url, view));
       }

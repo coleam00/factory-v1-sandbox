@@ -1,27 +1,6 @@
 import { Database } from "bun:sqlite";
 
-const sqliteIntegerMax = "9223372036854775807";
-const sqliteIntegerMinMagnitude = "9223372036854775808";
-declare const bookIdBrand: unique symbol;
-
-export type BookId = string & { readonly [bookIdBrand]: true };
-
-export function parseBookId(value: string): BookId | null {
-  const match = value.match(/^(-?)(\d+)$/);
-  if (match === null) return null;
-
-  const magnitude = match[2].replace(/^0+/, "") || "0";
-  const negative = match[1] === "-" && magnitude !== "0";
-  const limit = negative ? sqliteIntegerMinMagnitude : sqliteIntegerMax;
-  if (
-    magnitude.length > limit.length ||
-    (magnitude.length === limit.length && magnitude > limit)
-  ) {
-    return null;
-  }
-
-  return `${negative ? "-" : ""}${magnitude}` as BookId;
-}
+export type BookId = bigint;
 
 export type Book = {
   id: BookId;
@@ -31,20 +10,13 @@ export type Book = {
   createdAt: string;
 };
 
-type BookRow = Omit<Book, "id" | "read" | "createdAt"> & {
-  id: string;
-  read: number;
+type BookRow = Omit<Book, "read" | "createdAt"> & {
+  read: bigint;
   created_at: string;
 };
 
-const bookIdFromDatabase = (value: string) => {
-  const id = parseBookId(value);
-  if (id === null) throw new Error("Database returned an invalid book ID");
-  return id;
-};
-
 export function openShelf(path = process.env.SHELF_DB ?? "shelf.db") {
-  const db = new Database(path, { create: true });
+  const db = new Database(path, { create: true, safeIntegers: true });
   db.exec(`
     PRAGMA journal_mode = WAL;
     CREATE TABLE IF NOT EXISTS books (
@@ -57,11 +29,9 @@ export function openShelf(path = process.env.SHELF_DB ?? "shelf.db") {
   `);
 
   const list = db.query<BookRow, []>(
-    "SELECT CAST(id AS TEXT) AS id, title, author, read, created_at FROM books ORDER BY books.id DESC",
+    "SELECT id, title, author, read, created_at FROM books ORDER BY id DESC",
   );
-  const insert = db.query<{ id: string }, [string, string]>(
-    "INSERT INTO books (title, author) VALUES (?, ?) RETURNING CAST(id AS TEXT) AS id",
-  );
+  const insert = db.query("INSERT INTO books (title, author) VALUES (?, ?)");
   const toggle = db.query(
     "UPDATE books SET read = CASE read WHEN 0 THEN 1 ELSE 0 END WHERE id = ?",
   );
@@ -69,23 +39,20 @@ export function openShelf(path = process.env.SHELF_DB ?? "shelf.db") {
 
   return {
     list(): Book[] {
-      return list.all().map(({ id, created_at, read, ...book }) => ({
+      return list.all().map(({ created_at, read, ...book }) => ({
         ...book,
-        id: bookIdFromDatabase(id),
         read: Boolean(read),
         createdAt: created_at,
       }));
     },
-    add(title: string, author: string) {
-      return bookIdFromDatabase(insert.get(title.trim(), author.trim())!.id);
+    add(title: string, author: string): BookId {
+      return BigInt(insert.run(title.trim(), author.trim()).lastInsertRowid);
     },
     toggle(id: BookId) {
-      const exactId = parseBookId(id);
-      return exactId !== null && toggle.run(exactId).changes === 1;
+      return toggle.run(id).changes === 1;
     },
     remove(id: BookId) {
-      const exactId = parseBookId(id);
-      return exactId !== null && remove.run(exactId).changes === 1;
+      return remove.run(id).changes === 1;
     },
     close() {
       db.close();
