@@ -7,12 +7,9 @@ const html = (body: string, status = 200) =>
   new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8" } });
 const redirect = () => Response.redirect("/", 303);
 const exportJson = (books: ExportedBook[]) =>
-  `[${books
-    .map(
-      ({ id, title, author, read }) =>
-        `{"id":${id},"title":${JSON.stringify(title)},"author":${JSON.stringify(author)},"read":${read}}`,
-    )
-    .join(",")}]`;
+  JSON.stringify(books, (_key, value) =>
+    typeof value === "bigint" ? JSON.rawJSON(value.toString()) : value,
+  );
 
 export function startServer(options: { port?: number; dbPath?: string } = {}) {
   const shelf = openShelf(options.dbPath);
