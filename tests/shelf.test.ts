@@ -23,8 +23,29 @@ const ariaLabel = (element: string) => {
   return label;
 };
 
+async function readBackupLinks(body: string) {
+  const links: { href: string | null; text: string }[] = [];
+  let currentLink: (typeof links)[number] | undefined;
+
+  const parsedBody = new HTMLRewriter()
+    .on("#books a.backup-link", {
+      element(element) {
+        currentLink = { href: element.getAttribute("href"), text: "" };
+        links.push(currentLink);
+        element.onEndTag(() => currentLink = undefined);
+      },
+      text(text) {
+        if (currentLink) currentLink.text += text.text;
+      },
+    })
+    .transform(new Response(body));
+  await parsedBody.text();
+
+  return links;
+}
+
 describe("page", () => {
-  test("shows the backup download for empty and populated shelves", () => {
+  test("shows the backup download for empty and populated shelves", async () => {
     const populatedShelf = [
       {
         id: bookId(1n)!,
@@ -37,12 +58,9 @@ describe("page", () => {
 
     for (const books of [[], populatedShelf]) {
       const body = page(books, { filter: "all", order: "added" });
-      const booksSection = body.match(/<section id="books"[^>]*>([\s\S]*?)<\/section>/)?.[1];
-      expect(
-        booksSection?.match(
-          /<a class="backup-link" href="\/books\/export\.json">Download backup<\/a>/g,
-        ),
-      ).toHaveLength(1);
+      expect(await readBackupLinks(body)).toEqual([
+        { href: "/books/export.json", text: "Download backup" },
+      ]);
     }
   });
 
@@ -447,10 +465,16 @@ describe("HTTP routes", () => {
 });
 
 describe("JSON export", () => {
-  test("downloads an empty shelf", async () => {
+  test("the rendered backup link downloads an empty shelf", async () => {
     const app = startServer({ port: 0, dbPath: ":memory:" });
     try {
-      const response = await fetch(`${app.server.url.origin}/books/export.json`);
+      const pageResponse = await fetch(app.server.url);
+      const backupLinks = await readBackupLinks(await pageResponse.text());
+      expect(backupLinks).toHaveLength(1);
+      const backupLink = backupLinks[0];
+      if (!backupLink?.href) throw new Error("Rendered backup link has no target");
+
+      const response = await fetch(new URL(backupLink.href, app.server.url));
       expect(response.status).toBe(200);
       expect(response.headers.get("content-type")).toStartWith("application/json");
       expect(response.headers.get("content-disposition")).toBe(
