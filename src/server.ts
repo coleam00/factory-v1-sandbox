@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { openShelf } from "./db";
+import { openShelf, parseBookId } from "./db";
 import { parseView, viewLocation } from "./view-state";
 import { page } from "./views";
 
@@ -39,8 +39,9 @@ export function startServer(options: { port?: number; dbPath?: string } = {}) {
 
       const match = url.pathname.match(/^\/books\/(\d+)\/(toggle|delete)$/);
       if (request.method === "POST" && match) {
-        const id = match[1];
-        const changed = match[2] === "toggle" ? shelf.toggle(id) : shelf.remove(id);
+        const id = parseBookId(match[1]);
+        const changed =
+          id !== null && (match[2] === "toggle" ? shelf.toggle(id) : shelf.remove(id));
         if (!changed) return html(page(shelf.list(), view, "Book not found."), 404);
         return redirect(viewLocation(url, view));
       }

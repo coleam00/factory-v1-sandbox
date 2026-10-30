@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openShelf } from "../src/db";
+import { openShelf, parseBookId } from "../src/db";
 import { startServer } from "../src/server";
 import { applyView } from "../src/view-state";
 
@@ -144,6 +144,45 @@ describe("database", () => {
       rmSync(directory, { recursive: true, force: true });
     }
   });
+
+  test("parses only positive SQLite integer identities", () => {
+    const maxId = "9223372036854775807";
+
+    expect(parseBookId("0001")).toBe("1");
+    expect(parseBookId(maxId)).toBe(maxId);
+    for (const invalid of ["0", "-1", "1.0", "1e0", "9223372036854775808"]) {
+      expect(parseBookId(invalid)).toBeNull();
+    }
+  });
+
+  for (const action of ["toggle", "remove"] as const) {
+    test(`${action} rejects numeric spellings that SQLite could round`, () => {
+      const directory = mkdtempSync(join(tmpdir(), "shelf-test-"));
+      const dbPath = join(directory, "shelf.db");
+      const db = openShelf(dbPath);
+      const inspectionDb = new Database(dbPath);
+      const aliasProneId = "9007199254740993.0";
+      const adjacentId = "9007199254740992";
+      const targetId = "9007199254740993";
+
+      try {
+        const insert = inspectionDb.query(
+          "INSERT INTO books (id, title, author) VALUES (?, ?, ?)",
+        );
+        insert.run(BigInt(adjacentId), "Adjacent", "Must Not Change");
+        insert.run(BigInt(targetId), "Target", "Must Not Change");
+        const before = db.list();
+
+        expect(parseBookId(aliasProneId)).toBeNull();
+        expect(Reflect.apply(db[action], db, [aliasProneId])).toBe(false);
+        expect(db.list()).toEqual(before);
+      } finally {
+        inspectionDb.close();
+        db.close();
+        rmSync(directory, { recursive: true, force: true });
+      }
+    });
+  }
 });
 
 describe("HTTP routes", () => {
@@ -322,13 +361,18 @@ describe("shelf view", () => {
   test("orders exact numeric IDs when other sort fields match", () => {
     const adjacentId = "9007199254740992";
     const targetId = "9007199254740993";
-    const books = [adjacentId, targetId].map((id) => ({
-      id,
-      title: "Same title",
-      author: "Same author",
-      read: false,
-      createdAt: "2026-10-29 12:00:00",
-    }));
+    const books = [adjacentId, targetId].map((value) => {
+      const id = parseBookId(value);
+      if (id === null) throw new Error("Test book ID is invalid");
+
+      return {
+        id,
+        title: "Same title",
+        author: "Same author",
+        read: false,
+        createdAt: "2026-10-29 12:00:00",
+      };
+    });
 
     expect(applyView([...books], { filter: "all", order: "added" }).map(({ id }) => id)).toEqual([
       targetId,

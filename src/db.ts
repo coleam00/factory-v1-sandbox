@@ -1,6 +1,24 @@
 import { Database } from "bun:sqlite";
 
-export type BookId = string;
+const sqliteIntegerMax = "9223372036854775807";
+declare const bookIdBrand: unique symbol;
+
+export type BookId = string & { readonly [bookIdBrand]: true };
+
+export function parseBookId(value: string): BookId | null {
+  if (!/^\d+$/.test(value)) return null;
+
+  const canonical = value.replace(/^0+/, "");
+  if (
+    canonical.length === 0 ||
+    canonical.length > sqliteIntegerMax.length ||
+    (canonical.length === sqliteIntegerMax.length && canonical > sqliteIntegerMax)
+  ) {
+    return null;
+  }
+
+  return canonical as BookId;
+}
 
 export type Book = {
   id: BookId;
@@ -10,9 +28,16 @@ export type Book = {
   createdAt: string;
 };
 
-type BookRow = Omit<Book, "read" | "createdAt"> & {
+type BookRow = Omit<Book, "id" | "read" | "createdAt"> & {
+  id: string;
   read: number;
   created_at: string;
+};
+
+const bookIdFromDatabase = (value: string) => {
+  const id = parseBookId(value);
+  if (id === null) throw new Error("Database returned an invalid book ID");
+  return id;
 };
 
 export function openShelf(path = process.env.SHELF_DB ?? "shelf.db") {
@@ -31,7 +56,7 @@ export function openShelf(path = process.env.SHELF_DB ?? "shelf.db") {
   const list = db.query<BookRow, []>(
     "SELECT CAST(id AS TEXT) AS id, title, author, read, created_at FROM books ORDER BY books.id DESC",
   );
-  const insert = db.query<{ id: BookId }, [string, string]>(
+  const insert = db.query<{ id: string }, [string, string]>(
     "INSERT INTO books (title, author) VALUES (?, ?) RETURNING CAST(id AS TEXT) AS id",
   );
   const toggle = db.query(
@@ -41,20 +66,23 @@ export function openShelf(path = process.env.SHELF_DB ?? "shelf.db") {
 
   return {
     list(): Book[] {
-      return list.all().map(({ created_at, read, ...book }) => ({
+      return list.all().map(({ id, created_at, read, ...book }) => ({
         ...book,
+        id: bookIdFromDatabase(id),
         read: Boolean(read),
         createdAt: created_at,
       }));
     },
     add(title: string, author: string) {
-      return insert.get(title.trim(), author.trim())!.id;
+      return bookIdFromDatabase(insert.get(title.trim(), author.trim())!.id);
     },
     toggle(id: BookId) {
-      return toggle.run(id).changes === 1;
+      const exactId = parseBookId(id);
+      return exactId !== null && toggle.run(exactId).changes === 1;
     },
     remove(id: BookId) {
-      return remove.run(id).changes === 1;
+      const exactId = parseBookId(id);
+      return exactId !== null && remove.run(exactId).changes === 1;
     },
     close() {
       db.close();
