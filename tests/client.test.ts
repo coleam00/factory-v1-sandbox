@@ -459,6 +459,16 @@ describe("browser shelf mutations", () => {
       const deletedPage = await (await fetch(app.server.url)).text();
       expect(deletedPage).not.toContain("Minimum ID");
       expect(renderedBook(deletedPage, "Maximum ID")).toStartWith('<li class="book">');
+
+      const maximumToggle = await fetch(
+        new URL("/books/9223372036854775807/toggle", app.server.url),
+        { method: "POST", redirect: "manual" },
+      );
+      expect(maximumToggle.status).toBe(303);
+      const maximumToggledPage = await (await fetch(app.server.url)).text();
+      expect(renderedBook(maximumToggledPage, "Maximum ID")).toStartWith(
+        '<li class="book is-read">',
+      );
     } finally {
       app.close();
       await rm(directory, { recursive: true, force: true });
