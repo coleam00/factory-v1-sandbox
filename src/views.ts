@@ -37,6 +37,9 @@ export function page(
   error = "",
 ) {
   const read = books.filter((book) => book.read).length;
+  const count = books.length
+    ? `<div class="count"><b>${read}</b> of ${books.length} read</div>`
+    : "";
   const visibleBooks = applyView(books, view);
   const query = viewQuery(view);
   const rows = visibleBooks
@@ -54,14 +57,14 @@ export function page(
     .join("");
   const empty =
     books.length === 0
-      ? `<div class="empty"><p>Your shelf is empty.</p><span>Add a book to begin.</span></div>`
+      ? `<div class="empty"><p>Your shelf is empty. Add your first book above.</p></div>`
       : `<div class="empty"><p>No unread books.</p><span>Everything on your shelf is marked read.</span></div>`;
 
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Shelf</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
 <body><a class="skip-link" href="#${booksSectionId}">Skip to books</a><main>
-  <header><div><h1>Shelf</h1><p>Your personal reading list</p></div><div class="count"><b>${read}</b> of ${books.length} read</div></header>
+  <header><div><h1>Shelf</h1><p>Your personal reading list</p></div>${count}</header>
   <form class="add" method="post" action="/books${query}">
     <p class="add-guidance" id="${bookFieldGuidanceId}">Title and author can each be up to ${maxBookFieldLength} characters after trimming.</p>
     ${bookInput(bookFields.title)}
