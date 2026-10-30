@@ -56,8 +56,8 @@ export function page(
 <body><main>
   <header><div><h1>Shelf</h1><p>Your personal reading list</p></div><div class="count"><b>${read}</b> of ${books.length} read</div></header>
   <form class="add" method="post" action="/books${query}">
-    <label>Title<input name="title" required placeholder="The Left Hand of Darkness"></label>
-    <label>Author<input name="author" required placeholder="Ursula K. Le Guin"></label>
+    <label>Title<input name="title" required maxlength="200" placeholder="The Left Hand of Darkness"></label>
+    <label>Author<input name="author" required maxlength="200" placeholder="Ursula K. Le Guin"></label>
     <button>Add book</button>
   </form>
   ${error ? `<p class="error" role="alert">${escapeHtml(error)}</p>` : ""}
