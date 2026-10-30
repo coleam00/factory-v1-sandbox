@@ -1,15 +1,37 @@
 import { join } from "node:path";
-import { openShelf } from "./db";
+import { bookFields, maxBookFieldLength } from "./book-fields";
+import { bookId, openShelf } from "./db";
 import { parseView, viewLocation } from "./view-state";
 import { page } from "./views";
 
 const publicDir = join(import.meta.dir, "..", "public");
-const maximumBookId = 9223372036854775807n;
 const html = (body: string, status = 200) =>
   new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8" } });
 const redirect = (location: string) => Response.redirect(location, 303);
 const parseRevision = (value: string | undefined) =>
   value && /^[0-9a-f]{40}$/i.test(value) ? value.toLowerCase() : null;
+const codePointLength = (value: string) => [...value].length;
+
+type BookFormResult =
+  | { book: { title: string; author: string } }
+  | { error: string };
+
+const decodeBookForm = (form: FormData): BookFormResult => {
+  const title = String(form.get(bookFields.title.name) ?? "").trim();
+  const author = String(form.get(bookFields.author.name) ?? "").trim();
+
+  if (!title || !author) {
+    return { error: "Title and author are required." };
+  }
+  if (codePointLength(title) > maxBookFieldLength) {
+    return { error: `Title must be ${maxBookFieldLength} characters or fewer.` };
+  }
+  if (codePointLength(author) > maxBookFieldLength) {
+    return { error: `Author must be ${maxBookFieldLength} characters or fewer.` };
+  }
+
+  return { book: { title, author } };
+};
 
 export function startServer(options: { port?: number; dbPath?: string } = {}) {
   const revision = parseRevision(process.env.APP_REVISION);
@@ -24,25 +46,39 @@ export function startServer(options: { port?: number; dbPath?: string } = {}) {
         return Response.json({ status: "ok", revision });
       }
       if (request.method === "GET" && url.pathname === "/") return html(page(shelf.list(), view));
+      if (request.method === "GET" && url.pathname === "/books/export.json") {
+        return new Response(
+          JSON.stringify(shelf.exportBooks(), (_key, value) =>
+            typeof value === "bigint" ? JSON.rawJSON(value.toString()) : value,
+          ),
+          {
+            headers: {
+              "content-type": "application/json; charset=utf-8",
+              "content-disposition": 'attachment; filename="shelf.json"',
+            },
+          },
+        );
+      }
       if (request.method === "GET" && (url.pathname === "/app.js" || url.pathname === "/style.css")) {
         return new Response(Bun.file(join(publicDir, url.pathname.slice(1))));
       }
       if (request.method === "POST" && url.pathname === "/books") {
         const form = await request.formData();
-        const title = String(form.get("title") ?? "").trim();
-        const author = String(form.get("author") ?? "").trim();
-        if (!title || !author) {
-          return html(page(shelf.list(), view, "Title and author are required."), 400);
+        const result = decodeBookForm(form);
+        if ("error" in result) {
+          return html(page(shelf.list(), view, result.error), 400);
         }
-        shelf.add(title.slice(0, 200), author.slice(0, 200));
+        shelf.add(result.book.title, result.book.author);
         return redirect(viewLocation(url, view));
       }
 
-      const match = url.pathname.match(/^\/books\/(\d+)\/(toggle|delete)$/);
+      const match = url.pathname.match(/^\/books\/(-?\d+)\/(toggle|delete)$/);
       if (request.method === "POST" && match) {
-        const id = BigInt(match[1]);
-        const changed = id <= maximumBookId
-          && (match[2] === "toggle" ? shelf.toggle(id) : shelf.remove(id));
+        const id = bookId(BigInt(match[1]));
+        if (id === null) {
+          return html(page(shelf.list(), view, "Book not found."), 404);
+        }
+        const changed = match[2] === "toggle" ? shelf.toggle(id) : shelf.remove(id);
         if (!changed) return html(page(shelf.list(), view, "Book not found."), 404);
         return redirect(viewLocation(url, view));
       }
