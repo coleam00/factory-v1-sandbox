@@ -1,14 +1,12 @@
 import { Database } from "bun:sqlite";
 
-declare const bookIdBrand: unique symbol;
-
-export type BookId = bigint & { readonly [bookIdBrand]: true };
+export type BookId = bigint;
 
 const sqliteIntegerMin = -9223372036854775808n;
 const sqliteIntegerMax = 9223372036854775807n;
 
 export const bookId = (value: bigint): BookId | null =>
-  value >= sqliteIntegerMin && value <= sqliteIntegerMax ? (value as BookId) : null;
+  value >= sqliteIntegerMin && value <= sqliteIntegerMax ? value : null;
 
 export type Book = {
   id: BookId;
