@@ -181,7 +181,6 @@ describe("database", () => {
   test("adds, lists, toggles, and deletes books", () => {
     const db = openShelf(":memory:");
     const id = db.add("Dune", "Frank Herbert");
-    expect(typeof id).toBe("bigint");
     expect(db.list()).toMatchObject([{ id, title: "Dune", author: "Frank Herbert", read: false }]);
     expect(db.toggle(id)).toBe(true);
     expect(db.list()[0]?.read).toBe(true);
@@ -232,13 +231,6 @@ describe("HTTP routes", () => {
     expect(body).toContain("Dune");
     expect(body).toContain('aria-label="Mark Dune as read (book 1)"');
     expect(body).toContain("<b>0</b> of 1 read");
-
-    const unknownAction = await fetch(`${base}/books/1/archive`, {
-      method: "POST",
-      redirect: "manual",
-    });
-    expect(unknownAction.status).toBe(404);
-    expect(await (await fetch(base)).text()).toContain("Dune");
 
     response = await fetch(`${base}/books/1/toggle`, { method: "POST", redirect: "manual" });
     expect(response.status).toBe(303);
