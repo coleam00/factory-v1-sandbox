@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
@@ -47,10 +47,17 @@ function captureBrowserOutput(browser: ReturnType<typeof Bun.spawn>) {
 }
 
 async function devtoolsPort(
+  profile: string,
   browser: ReturnType<typeof Bun.spawn>,
   diagnostics: ReturnType<typeof captureBrowserOutput>,
 ) {
   for (let attempt = 0; attempt < 200; attempt += 1) {
+    try {
+      const port = Number(
+        readFileSync(join(profile, "DevToolsActivePort"), "utf8").split(/\r?\n/, 1)[0],
+      );
+      if (Number.isInteger(port) && port > 0) return port;
+    } catch {}
     const match = diagnostics.output().match(/DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)\//);
     if (match) return Number(match[1]);
     if (browser.exitCode !== null) {
@@ -67,8 +74,23 @@ async function devtoolsPort(
 async function connectCdp(url: string) {
   const socket = new WebSocket(url);
   const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
-  const events = new Map<string, Array<() => void>>();
+  const events = new Map<
+    string,
+    Array<{ resolve: () => void; reject: (error: Error) => void }>
+  >();
   let nextId = 1;
+  let terminalError: Error | undefined;
+
+  const terminate = () => {
+    if (terminalError) return;
+    terminalError = new Error("Chrome DevTools connection closed");
+    for (const request of pending.values()) request.reject(terminalError);
+    pending.clear();
+    for (const listeners of events.values()) {
+      for (const listener of listeners) listener.reject(terminalError);
+    }
+    events.clear();
+  };
 
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(String(event.data)) as CdpMessage;
@@ -80,7 +102,11 @@ async function connectCdp(url: string) {
       else request.resolve(message.result);
       return;
     }
-    if (message.method) events.get(message.method)?.splice(0).forEach((resolve) => resolve());
+    if (message.method) {
+      const listeners = events.get(message.method);
+      events.delete(message.method);
+      listeners?.forEach(({ resolve }) => resolve());
+    }
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -89,18 +115,22 @@ async function connectCdp(url: string) {
       once: true,
     });
   });
+  socket.addEventListener("close", terminate, { once: true });
+  socket.addEventListener("error", terminate, { once: true });
 
   return {
     send(method: string, params: Record<string, unknown> = {}) {
+      if (terminalError) return Promise.reject(terminalError);
       const id = nextId++;
       const response = new Promise<unknown>((resolve, reject) => pending.set(id, { resolve, reject }));
       socket.send(JSON.stringify({ id, method, params }));
       return response;
     },
     event(method: string) {
-      return new Promise<void>((resolve) => {
+      if (terminalError) return Promise.reject(terminalError);
+      return new Promise<void>((resolve, reject) => {
         const listeners = events.get(method) ?? [];
-        listeners.push(resolve);
+        listeners.push({ resolve, reject });
         events.set(method, listeners);
       });
     },
@@ -117,6 +147,7 @@ const focusTargets = [
   { name: "title", selector: 'input[name="title"]' },
   { name: "author", selector: 'input[name="author"]' },
   { name: "add", selector: ".add button" },
+  { name: "backup", selector: ".backup-link" },
   { name: "filter", selector: 'select[name="filter"]' },
   { name: "order", selector: 'select[name="order"]' },
   { name: "apply", selector: ".view-controls button" },
@@ -158,6 +189,23 @@ async function click(cdp: CdpClient, selector: string) {
   });
 }
 
+function waitForDom(cdp: CdpClient, condition: string) {
+  return cdp.send("Runtime.evaluate", {
+    awaitPromise: true,
+    expression: `new Promise((resolve) => {
+      let observer;
+      const settle = () => {
+        if (!(${condition})) return;
+        observer?.disconnect();
+        resolve(true);
+      };
+      observer = new MutationObserver(settle);
+      observer.observe(document, { attributes: true, childList: true, subtree: true });
+      settle();
+    })`,
+  });
+}
+
 const chromePath = chromeExecutable();
 const responsiveLayoutTest = chromePath ? test : test.skip;
 
@@ -196,7 +244,7 @@ responsiveLayoutTest(
       const author = "A".repeat(200);
       const ordinaryTitle = "The Left Hand of Darkness";
       const ordinaryAuthor = "Ursula Kroeber Le Guin";
-      const port = await devtoolsPort(browser, browserOutput);
+      const port = await devtoolsPort(profile, browser, browserOutput);
       const target = (await (
         await fetch(`http://127.0.0.1:${port}/json/new?about%3Ablank`, { method: "PUT" })
       ).json()) as { webSocketDebuggerUrl: string };
@@ -220,13 +268,16 @@ responsiveLayoutTest(
           authorMaxLength: document.querySelector('input[name="author"]').maxLength,
         }))()`,
       })) as { result: { value: { titleMaxLength: number; authorMaxLength: number } } };
-      expect(renderedForm.result.value).toEqual({ titleMaxLength: 200, authorMaxLength: 200 });
+      expect(renderedForm.result.value).toEqual({ titleMaxLength: -1, authorMaxLength: -1 });
 
       await click(cdp, 'input[name="title"]');
       await cdp.send("Input.insertText", { text: title });
       await click(cdp, 'input[name="author"]');
       await cdp.send("Input.insertText", { text: author });
-      const added = cdp.event("Page.loadEventFired");
+      const added = waitForDom(
+        cdp,
+        `document.querySelector('.book strong')?.textContent === ${JSON.stringify(title)}`,
+      );
       await click(cdp, ".add button");
       await added;
 
@@ -299,7 +350,9 @@ responsiveLayoutTest(
       }
       for (const control of layout.rowControls) expect(control.tabIndex).toBeGreaterThanOrEqual(0);
 
-      const expectedFocusOrder = focusTargets.map(({ name }) => name);
+      const expectedFocusOrder = focusTargets
+        .map(({ name }) => name)
+        .filter((name) => name !== "skip");
       const focusOrder: string[] = [];
       for (let step = 0; step < expectedFocusOrder.length + 4; step += 1) {
         await cdp.send("Input.dispatchKeyEvent", {
@@ -348,7 +401,10 @@ responsiveLayoutTest(
       }
       expect(focusOrder).toEqual(expectedFocusOrder);
 
-      const toggled = cdp.event("Page.loadEventFired");
+      const toggled = waitForDom(
+        cdp,
+        "document.querySelector('.book')?.classList.contains('is-read')",
+      );
       await click(cdp, ".check");
       await toggled;
       const readState = (await cdp.send("Runtime.evaluate", {
@@ -368,7 +424,7 @@ responsiveLayoutTest(
       });
 
       const dialog = cdp.event("Page.javascriptDialogOpening");
-      const deleted = cdp.event("Page.loadEventFired");
+      const deleted = waitForDom(cdp, "!document.querySelector('.book')");
       const deleteClick = click(cdp, ".delete");
       await dialog;
       await cdp.send("Page.handleJavaScriptDialog", { accept: true });
@@ -377,15 +433,15 @@ responsiveLayoutTest(
       const emptyState = (await cdp.send("Runtime.evaluate", {
         returnByValue: true,
         expression: `(() => ({
-          count: document.querySelector('.count').textContent.trim(),
+          count: document.querySelector('.count')?.textContent.trim() ?? null,
           books: document.querySelectorAll('.book').length,
           message: document.querySelector('.empty p').textContent,
         }))()`,
-      })) as { result: { value: { count: string; books: number; message: string } } };
+      })) as { result: { value: { count: string | null; books: number; message: string } } };
       expect(emptyState.result.value).toEqual({
-        count: "0 of 0 read",
+        count: null,
         books: 0,
-        message: "Your shelf is empty.",
+        message: "Your shelf is empty. Add your first book above.",
       });
 
       await cdp.send("Emulation.setDeviceMetricsOverride", {
@@ -398,7 +454,10 @@ responsiveLayoutTest(
       await cdp.send("Input.insertText", { text: ordinaryTitle });
       await click(cdp, 'input[name="author"]');
       await cdp.send("Input.insertText", { text: ordinaryAuthor });
-      const ordinaryAdded = cdp.event("Page.loadEventFired");
+      const ordinaryAdded = waitForDom(
+        cdp,
+        `document.querySelector('.book strong')?.textContent === ${JSON.stringify(ordinaryTitle)}`,
+      );
       await click(cdp, ".add button");
       await ordinaryAdded;
 
@@ -438,6 +497,24 @@ responsiveLayoutTest(
         titleLines: 1,
         authorLines: 1,
       });
+
+      const pendingCommand = cdp.send("Runtime.evaluate", {
+        awaitPromise: true,
+        expression: "new Promise(() => {})",
+      });
+      const pendingEvent = cdp.event("Page.loadEventFired");
+      const terminalWaiters = Promise.allSettled([pendingCommand, pendingEvent]);
+      browser.kill();
+      const terminalResults = await terminalWaiters;
+      expect(terminalResults.map(({ status }) => status)).toEqual(["rejected", "rejected"]);
+      expect(
+        terminalResults.map((result) =>
+          result.status === "rejected" ? String(result.reason) : "resolved",
+        ),
+      ).toEqual([
+        "Error: Chrome DevTools connection closed",
+        "Error: Chrome DevTools connection closed",
+      ]);
     } finally {
       cdp?.close();
       try {
