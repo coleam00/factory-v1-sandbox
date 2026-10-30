@@ -237,6 +237,24 @@ async function addServerBook(app: ReturnType<typeof startServer>) {
 }
 
 describe("browser shelf mutations", () => {
+  test("leaves the rendered view controls to native GET navigation", async () => {
+    const initialPage = renderPage([]);
+    let requests = 0;
+    const client = clientHarness(initialPage, async () => {
+      requests++;
+      return new Response(renderPage([]));
+    });
+    const event = new TestSubmitEvent(renderedForm(initialPage, "/"));
+
+    await client.submit(event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(requests).toBe(0);
+    expect(client.document.replacements).toEqual([]);
+    expect(client.document.currentMain.markup).toBe(mainMarkup(initialPage));
+    expect(client.reloads()).toBe(0);
+  });
+
   test("adds the first book in place without navigating", async () => {
     const app = startServer({ port: 0, dbPath: ":memory:" });
     try {
