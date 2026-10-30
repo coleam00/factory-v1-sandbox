@@ -401,6 +401,33 @@ responsiveLayoutTest(
       }
       expect(focusOrder).toEqual(expectedFocusOrder);
 
+      const rowControlVisibility = (await cdp.send("Runtime.evaluate", {
+        returnByValue: true,
+        expression: `([...document.querySelectorAll('.book button')].map((element) => {
+          const rect = element.getBoundingClientRect();
+          const center = document.elementFromPoint(
+            rect.left + rect.width / 2,
+            rect.top + rect.height / 2,
+          );
+          return {
+            top: rect.top,
+            bottom: rect.bottom,
+            visible:
+              element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) &&
+              rect.width > 0 && rect.height > 0 && element.contains(center),
+          };
+        }))`,
+      })) as {
+        result: { value: Array<{ top: number; bottom: number; visible: boolean }> };
+      };
+      expect(rowControlVisibility.result.value).toHaveLength(2);
+      for (const control of rowControlVisibility.result.value) {
+        expect(control.top).toBeGreaterThanOrEqual(0);
+        expect(control.bottom).toBeLessThanOrEqual(900);
+        expect(control.bottom).toBeGreaterThan(control.top);
+        expect(control.visible).toBe(true);
+      }
+
       const toggled = waitForDom(
         cdp,
         "document.querySelector('.book')?.classList.contains('is-read')",
