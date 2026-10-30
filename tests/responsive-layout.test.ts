@@ -1,6 +1,7 @@
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ServerWebSocket } from "bun";
 import { expect, test } from "bun:test";
 import { startServer } from "../src/server";
 
@@ -393,10 +394,7 @@ test("rejects malformed Chrome boundary payloads", () => {
   }
 });
 
-type CdpTestPeer = {
-  send(data: string): number;
-  terminate(): void;
-};
+type CdpTestPeer = Pick<ServerWebSocket, "send" | "terminate">;
 
 function cdpTestServer() {
   let acceptPeer: (peer: CdpTestPeer) => void;
@@ -442,12 +440,19 @@ test("rejects current and future CDP waiters after terminal failures", async () 
     const closedPeer = await closedServer.peer;
     const command = closedClient.send("Page.enable");
     const event = closedClient.event("Page.loadEventFired");
+    const secondEvent = closedClient.event("Page.loadEventFired");
     const commandRejected = rejectionOf(command);
     const eventRejected = rejectionOf(event);
+    const secondEventRejected = rejectionOf(secondEvent);
     closedPeer.terminate();
-    const [commandError, eventError] = await Promise.all([commandRejected, eventRejected]);
+    const [commandError, eventError, secondEventError] = await Promise.all([
+      commandRejected,
+      eventRejected,
+      secondEventRejected,
+    ]);
     expect(commandError.message).toBe("Chrome DevTools connection closed");
     expect(eventError.message).toBe("Chrome DevTools connection closed");
+    expect(secondEventError).toBe(eventError);
     expect((await rejectionOf(closedClient.send("Runtime.enable"))).message).toBe(
       "Chrome DevTools connection closed",
     );
