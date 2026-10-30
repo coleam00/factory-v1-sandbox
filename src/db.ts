@@ -40,7 +40,7 @@ export function openShelf(path = process.env.SHELF_DB ?? "shelf.db") {
     "SELECT id, title, author, read, created_at FROM books ORDER BY id DESC",
   ).safeIntegers(true);
   const insert = db
-    .query<{ id: bigint }, [string, string]>(
+    .query<{ id: BookId }, [string, string]>(
       "INSERT INTO books (title, author) VALUES (?, ?) RETURNING id",
     )
     .safeIntegers(true);
