@@ -1,7 +1,9 @@
 import { Database } from "bun:sqlite";
 
+export type BookId = bigint;
+
 export type Book = {
-  id: number;
+  id: BookId;
   title: string;
   author: string;
   read: boolean;
@@ -9,12 +11,12 @@ export type Book = {
 };
 
 type BookRow = Omit<Book, "read" | "createdAt"> & {
-  read: number;
+  read: bigint;
   created_at: string;
 };
 
 export function openShelf(path = process.env.SHELF_DB ?? "shelf.db") {
-  const db = new Database(path, { create: true });
+  const db = new Database(path, { create: true, safeIntegers: true });
   db.exec(`
     PRAGMA journal_mode = WAL;
     CREATE TABLE IF NOT EXISTS books (
@@ -43,13 +45,13 @@ export function openShelf(path = process.env.SHELF_DB ?? "shelf.db") {
         createdAt: created_at,
       }));
     },
-    add(title: string, author: string) {
-      return Number(insert.run(title.trim(), author.trim()).lastInsertRowid);
+    add(title: string, author: string): BookId {
+      return BigInt(insert.run(title.trim(), author.trim()).lastInsertRowid);
     },
-    toggle(id: number) {
+    toggle(id: BookId) {
       return toggle.run(id).changes === 1;
     },
-    remove(id: number) {
+    remove(id: BookId) {
       return remove.run(id).changes === 1;
     },
     close() {
