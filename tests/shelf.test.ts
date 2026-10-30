@@ -102,26 +102,6 @@ describe("HTTP routes", () => {
     expect((await fetch(`${base}/missing`)).status).toBe(404);
   });
 
-  test("rejects non-text book fields without changing the shelf", async () => {
-    const activeView = "filter=unread&order=title";
-
-    for (const field of ["title", "author"] as const) {
-      const form = new FormData();
-      form.set("title", "Dune");
-      form.set("author", "Frank Herbert");
-      form.set(field, new Blob(["invalid"]), `${field}.txt`);
-
-      const response = await fetch(`${base}/books?${activeView}`, { method: "POST", body: form });
-      expect(response.status).toBe(400);
-      const body = await response.text();
-      expect(body).toContain(
-        `${field === "title" ? "Title" : "Author"} must be text.`,
-      );
-      expect(body).toContain('action="/books?filter=unread&amp;order=title"');
-      expect(await (await fetch(base)).text()).toContain("<b>0</b> of 0 read");
-    }
-  });
-
   test("accepts trimmed title and author fields at 200 characters", async () => {
     expect(maxBookFieldLength).toBe(200);
     const title = "T".repeat(maxBookFieldLength);

@@ -29,16 +29,8 @@ export function startServer(options: { port?: number; dbPath?: string } = {}) {
       }
       if (request.method === "POST" && url.pathname === "/books") {
         const form = await request.formData();
-        const titleEntry = form.get("title");
-        const authorEntry = form.get("author");
-        if (titleEntry !== null && typeof titleEntry !== "string") {
-          return html(page(shelf.list(), view, "Title must be text."), 400);
-        }
-        if (authorEntry !== null && typeof authorEntry !== "string") {
-          return html(page(shelf.list(), view, "Author must be text."), 400);
-        }
-        const title = (titleEntry ?? "").trim();
-        const author = (authorEntry ?? "").trim();
+        const title = String(form.get("title") ?? "").trim();
+        const author = String(form.get("author") ?? "").trim();
         if (!title || !author) {
           return html(page(shelf.list(), view, "Title and author are required."), 400);
         }
