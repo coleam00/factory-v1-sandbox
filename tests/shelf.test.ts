@@ -255,7 +255,7 @@ describe("HTTP routes", () => {
     expect((await fetch(`${base}/missing`)).status).toBe(404);
   });
 
-  for (const action of ["toggle", "delete"] as const) {
+  for (const action of mutationActions) {
     test(`${action} preserves the existing zero-ID success flow`, async () => {
       const directory = mkdtempSync(join(tmpdir(), "shelf-test-"));
       const dbPath = join(directory, "shelf.db");
