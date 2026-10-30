@@ -66,6 +66,7 @@ function expectEmptyShelf(html: string) {
 }
 
 const originalRevision = process.env.APP_REVISION;
+const mutationActions = ["toggle", "delete"] as const;
 
 function startWithRevision(revision?: string) {
   if (revision === undefined) delete process.env.APP_REVISION;
@@ -257,7 +258,7 @@ describe("HTTP routes", () => {
   test("returns 404 for mutation requests with ids outside SQLite's range", async () => {
     const firstExcludedId = 9223372036854775808n;
 
-    for (const action of ["toggle", "delete"] as const) {
+    for (const action of mutationActions) {
       const response = await fetch(`${base}/books/${firstExcludedId}/${action}`, {
         method: "POST",
         redirect: "manual",
@@ -318,7 +319,7 @@ describe("HTTP routes", () => {
       });
       const shelfBefore = await (await fetch(`${base}/?${activeView}`)).text();
 
-      for (const action of ["toggle", "delete"] as const) {
+      for (const action of mutationActions) {
         const response = await fetch(`${base}/books/999/${action}?${activeView}`, {
           method: "POST",
           redirect: "manual",
@@ -418,6 +419,148 @@ describe("HTTP routes", () => {
       expect(ariaLabel(toggleForm(body, firstId))).toContain(" as read ");
     } finally {
       boundaryApp.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("JSON export", () => {
+  test("downloads an empty shelf", async () => {
+    const app = startServer({ port: 0, dbPath: ":memory:" });
+    try {
+      const response = await fetch(`${app.server.url.origin}/books/export.json`);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toStartWith("application/json");
+      expect(response.headers.get("content-disposition")).toBe(
+        'attachment; filename="shelf.json"',
+      );
+      expect(await response.text()).toBe("[]");
+    } finally {
+      app.close();
+    }
+  });
+
+  test("orders books by numeric ID without truncating stored strings", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "shelf-export-order-"));
+    const dbPath = join(directory, "shelf.db");
+    const longTitle = `Z${" title".repeat(40)}`;
+    const longAuthor = `Z${" author".repeat(35)}`;
+    const shelf = openShelf(dbPath);
+    shelf.close();
+
+    const seed = new Database(dbPath, { safeIntegers: true });
+    const insert = seed.query("INSERT INTO books (id, title, author) VALUES (?, ?, ?)");
+    insert.run(2n, longTitle, longAuthor);
+    insert.run(10n, "A title", "A author");
+    seed.close();
+
+    const app = startServer({ port: 0, dbPath });
+    try {
+      const response = await fetch(`${app.server.url.origin}/books/export.json?order=title`);
+      const books = (await response.json()) as Array<{
+        id: number;
+        title: string;
+        author: string;
+      }>;
+
+      expect(books.map(({ id }) => id)).toEqual([2, 10]);
+      expect(books[0]?.title).toBe(longTitle);
+      expect(books[0]?.author).toBe(longAuthor);
+    } finally {
+      app.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("exports an existing shelf exactly without changing it", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "shelf-export-"));
+    const dbPath = join(directory, "shelf.db");
+    const negative = {
+      id: -9_223_372_036_854_775_807n,
+      title: "Negative identifier",
+      author: "Imported data",
+      read: 1,
+    };
+    const first = {
+      id: 9_007_199_254_740_992n,
+      title: 'A <Shelf> & "Stories"',
+      author: "Anne O'Writer",
+      read: 0,
+    };
+    const second = {
+      id: 9_007_199_254_740_993n,
+      title: "Second Book",
+      author: "Another Author",
+      read: 1,
+    };
+    const shelf = openShelf(dbPath);
+    shelf.close();
+
+    const seed = new Database(dbPath, { safeIntegers: true });
+    const insert = seed.query(
+      "INSERT INTO books (id, title, author, read) VALUES (?, ?, ?, ?)",
+    );
+    insert.run(negative.id, negative.title, negative.author, negative.read);
+    insert.run(first.id, first.title, first.author, first.read);
+    insert.run(second.id, second.title, second.author, second.read);
+    const schemaBefore = seed
+      .query("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name")
+      .all();
+    const booksBefore = seed.query("SELECT * FROM books ORDER BY id").all();
+    seed.close();
+
+    const app = startServer({ port: 0, dbPath });
+    const base = app.server.url.origin;
+    try {
+      const pageResponse = await fetch(base);
+      expect(pageResponse.headers.get("content-disposition")).toBeNull();
+      const pageBody = await pageResponse.text();
+      expect(pageBody.indexOf(second.title)).toBeLessThan(pageBody.indexOf("A &lt;Shelf&gt;"));
+      expect(pageBody).toContain(`/books/${first.id}/toggle`);
+      expect(pageBody).toContain(`/books/${second.id}/delete`);
+
+      const response = await fetch(`${base}/books/export.json?filter=unread`);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toStartWith("application/json");
+      expect(response.headers.get("content-disposition")).toBe(
+        'attachment; filename="shelf.json"',
+      );
+      const raw = await response.text();
+      expect(raw).toBe(
+        `[{"id":${negative.id},"title":${JSON.stringify(negative.title)},"author":${JSON.stringify(negative.author)},"read":true},` +
+          `{"id":${first.id},"title":${JSON.stringify(first.title)},"author":${JSON.stringify(first.author)},"read":false},` +
+          `{"id":${second.id},"title":${JSON.stringify(second.title)},"author":${JSON.stringify(second.author)},"read":true}]`,
+      );
+      expect(JSON.parse(raw)).toHaveLength(3);
+
+      const inspection = new Database(dbPath, { readonly: true, safeIntegers: true });
+      expect(
+        inspection
+          .query("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name")
+          .all(),
+      ).toEqual(schemaBefore);
+      expect(inspection.query("SELECT * FROM books ORDER BY id").all()).toEqual(booksBefore);
+
+      await fetch(`${base}/books/${first.id}/toggle`, { method: "POST", redirect: "manual" });
+      expect(inspection.query("SELECT read FROM books WHERE id = ?").get(first.id)).toEqual({
+        read: 1n,
+      });
+      expect(inspection.query("SELECT read FROM books WHERE id = ?").get(second.id)).toEqual({
+        read: 1n,
+      });
+
+      await fetch(`${base}/books/${second.id}/delete`, { method: "POST", redirect: "manual" });
+      expect(inspection.query("SELECT id FROM books ORDER BY id").all()).toEqual([
+        { id: negative.id },
+        { id: first.id },
+      ]);
+      inspection.close();
+
+      const shelf = openShelf(dbPath);
+      expect(shelf.add("Third Book", "Third Author")).toBe(second.id + 1n);
+      shelf.close();
+    } finally {
+      app.close();
       rmSync(directory, { recursive: true, force: true });
     }
   });

@@ -23,6 +23,19 @@ export function startServer(options: { port?: number; dbPath?: string } = {}) {
         return Response.json({ status: "ok", revision });
       }
       if (request.method === "GET" && url.pathname === "/") return html(page(shelf.list(), view));
+      if (request.method === "GET" && url.pathname === "/books/export.json") {
+        return new Response(
+          JSON.stringify(shelf.exportBooks(), (_key, value) =>
+            typeof value === "bigint" ? JSON.rawJSON(value.toString()) : value,
+          ),
+          {
+            headers: {
+              "content-type": "application/json; charset=utf-8",
+              "content-disposition": 'attachment; filename="shelf.json"',
+            },
+          },
+        );
+      }
       if (request.method === "GET" && (url.pathname === "/app.js" || url.pathname === "/style.css")) {
         return new Response(Bun.file(join(publicDir, url.pathname.slice(1))));
       }

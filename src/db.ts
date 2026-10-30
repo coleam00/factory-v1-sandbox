@@ -18,10 +18,17 @@ export type Book = {
   createdAt: string;
 };
 
+export type ExportedBook = Pick<Book, "id" | "title" | "author" | "read">;
+
 type BookRow = Omit<Book, "id" | "read" | "createdAt"> & {
   id: bigint;
   read: bigint;
   created_at: string;
+};
+
+type ExportedBookRow = Omit<ExportedBook, "id" | "read"> & {
+  id: bigint;
+  read: bigint;
 };
 
 export function openShelf(path = process.env.SHELF_DB ?? "shelf.db") {
@@ -39,6 +46,9 @@ export function openShelf(path = process.env.SHELF_DB ?? "shelf.db") {
 
   const list = db.query<BookRow, []>(
     "SELECT id, title, author, read, created_at FROM books ORDER BY id DESC",
+  );
+  const exportList = db.query<ExportedBookRow, []>(
+    "SELECT id, title, author, read FROM books ORDER BY id ASC",
   );
   const insert = db.query<{ id: bigint }, [string, string]>(
     "INSERT INTO books (title, author) VALUES (?, ?) RETURNING id",
@@ -61,6 +71,15 @@ export function openShelf(path = process.env.SHELF_DB ?? "shelf.db") {
           read: Boolean(read),
           createdAt: created_at,
         };
+      });
+    },
+    exportBooks(): ExportedBook[] {
+      return exportList.all().map(({ id: rawId, title, author, read }) => {
+        const id = bookId(rawId);
+        if (id === null) {
+          throw new RangeError(`SQLite returned an out-of-range book ID: ${rawId}`);
+        }
+        return { id, title, author, read: Boolean(read) };
       });
     },
     add(title: string, author: string) {
