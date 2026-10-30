@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openShelf } from "../src/db";
+import { bookId, openShelf } from "../src/db";
 import { startServer } from "../src/server";
 import { page } from "../src/views";
 
@@ -27,21 +27,21 @@ describe("page", () => {
   test("names each read toggle for its book and next action", () => {
     const body = page([
       {
-        id: 1n,
+        id: bookId(1n)!,
         title: "Dune",
         author: "Frank Herbert",
         read: false,
         createdAt: "2026-10-29 00:00:00",
       },
       {
-        id: 2n,
+        id: bookId(2n)!,
         title: 'A "Book" & <More>',
         author: "Another Author",
         read: true,
         createdAt: "2026-10-29 00:00:00",
       },
       {
-        id: 3n,
+        id: bookId(3n)!,
         title: "The Left Hand of Darkness",
         author: "Ursula K. Le Guin",
         read: false,
@@ -58,6 +58,12 @@ describe("page", () => {
     );
   });
 });
+
+function expectEmptyShelf(html: string) {
+  const contents = html.match(/<div class="empty">([\s\S]*?)<\/div>/)?.[1];
+  expect(contents).toBe("<p>Your shelf is empty. Add your first book above.</p>");
+  expect(html).not.toContain('class="count"');
+}
 
 const originalRevision = process.env.APP_REVISION;
 
@@ -164,6 +170,13 @@ test("structural reader excludes inert template endpoints and label text", async
 });
 
 describe("database", () => {
+  test("accepts only signed SQLite integer IDs", () => {
+    expect(bookId(-9223372036854775808n)).toBe(-9223372036854775808n);
+    expect(bookId(9223372036854775807n)).toBe(9223372036854775807n);
+    expect(bookId(-9223372036854775809n)).toBeNull();
+    expect(bookId(9223372036854775808n)).toBeNull();
+  });
+
   test("adds, lists, toggles, and deletes books", () => {
     const db = openShelf(":memory:");
     const id = db.add("Dune", "Frank Herbert");
@@ -189,7 +202,7 @@ describe("HTTP routes", () => {
   test("renders, creates, toggles, and deletes a book", async () => {
     let response = await fetch(base);
     let body = await response.text();
-    expect(body).toContain("<b>0</b> of 0 read");
+    expectEmptyShelf(body);
     const { skipLinks, idOwners } = await readActiveSkipLinkEndpoints(body);
     expect(skipLinks).toHaveLength(1);
     expect(skipLinks[0]!.text.trim()).toBe("Skip to books");
@@ -228,7 +241,7 @@ describe("HTTP routes", () => {
     response = await fetch(`${base}/books/1/delete`, { method: "POST", redirect: "manual" });
     expect(response.status).toBe(303);
     expect(response.headers.get("location")).toBe("/");
-    expect(await (await fetch(base)).text()).toContain("<b>0</b> of 0 read");
+    expectEmptyShelf(await (await fetch(base)).text());
   });
 
   test("validates input and returns 404s", async () => {
