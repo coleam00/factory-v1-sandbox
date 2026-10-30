@@ -27,9 +27,7 @@ function chromeExecutable() {
     "/usr/bin/chromium",
     "/usr/bin/chromium-browser",
   ];
-  const executable = candidates.find((candidate) => candidate && existsSync(candidate));
-  if (!executable) throw new Error("Chrome or Chromium is required; set CHROME_PATH to its executable");
-  return executable;
+  return candidates.find((candidate): candidate is string => Boolean(candidate && existsSync(candidate)));
 }
 
 function captureBrowserOutput(browser: ReturnType<typeof Bun.spawn>) {
@@ -160,9 +158,14 @@ async function click(cdp: CdpClient, selector: string) {
   });
 }
 
-test(
-  "keeps complete long book text and controls usable at 320px",
+const chromePath = chromeExecutable();
+const responsiveLayoutTest = chromePath ? test : test.skip;
+
+responsiveLayoutTest(
+  "keeps book text and controls usable across narrow and wide layouts",
   async () => {
+    if (!chromePath) return;
+
     let app: ReturnType<typeof startServer> | undefined;
     let profile: string | undefined;
     let browser: ReturnType<typeof Bun.spawn> | undefined;
@@ -174,7 +177,7 @@ test(
       profile = mkdtempSync(join(tmpdir(), "shelf-browser-"));
       browser = Bun.spawn(
         [
-          chromeExecutable(),
+          chromePath,
           "--headless=new",
           "--no-sandbox",
           "--disable-dev-shm-usage",
@@ -191,6 +194,8 @@ test(
 
       const title = "T".repeat(200);
       const author = "A".repeat(200);
+      const ordinaryTitle = "The Left Hand of Darkness";
+      const ordinaryAuthor = "Ursula Kroeber Le Guin";
       const port = await devtoolsPort(browser, browserOutput);
       const target = (await (
         await fetch(`http://127.0.0.1:${port}/json/new?about%3Ablank`, { method: "PUT" })
@@ -375,6 +380,57 @@ test(
         count: "0 of 0 read",
         books: 0,
         message: "Your shelf is empty.",
+      });
+
+      await cdp.send("Emulation.setDeviceMetricsOverride", {
+        width: 760,
+        height: 900,
+        deviceScaleFactor: 1,
+        mobile: false,
+      });
+      await click(cdp, 'input[name="title"]');
+      await cdp.send("Input.insertText", { text: ordinaryTitle });
+      await click(cdp, 'input[name="author"]');
+      await cdp.send("Input.insertText", { text: ordinaryAuthor });
+      const ordinaryAdded = cdp.event("Page.loadEventFired");
+      await click(cdp, ".add button");
+      await ordinaryAdded;
+
+      const ordinaryText = (await cdp.send("Runtime.evaluate", {
+        returnByValue: true,
+        expression: `(() => {
+          const title = document.querySelector('.book strong');
+          const author = document.querySelector('.book span');
+          const textLines = (element) => {
+            const range = document.createRange();
+            range.selectNodeContents(element);
+            return range.getClientRects().length;
+          };
+          return {
+            viewportWidth: window.innerWidth,
+            title: title.textContent,
+            author: author.textContent,
+            titleLines: textLines(title),
+            authorLines: textLines(author),
+          };
+        })()`,
+      })) as {
+        result: {
+          value: {
+            viewportWidth: number;
+            title: string;
+            author: string;
+            titleLines: number;
+            authorLines: number;
+          };
+        };
+      };
+      expect(ordinaryText.result.value).toEqual({
+        viewportWidth: 760,
+        title: ordinaryTitle,
+        author: ordinaryAuthor,
+        titleLines: 1,
+        authorLines: 1,
       });
     } finally {
       cdp?.close();
