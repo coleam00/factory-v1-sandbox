@@ -1,7 +1,7 @@
 import type { Book } from "./db";
 
 const newestIdFirst = (left: Book, right: Book) =>
-  left.id < right.id ? 1 : left.id > right.id ? -1 : 0;
+  left.id === right.id ? 0 : left.id < right.id ? 1 : -1;
 
 export const viewFields = {
   filter: {

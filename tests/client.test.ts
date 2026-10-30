@@ -1,0 +1,579 @@
+import { describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { Book } from "../src/db";
+import { bookId, openShelf } from "../src/db";
+import { startServer } from "../src/server";
+import { page } from "../src/views";
+
+const appSource = await Bun.file(new URL("../public/app.js", import.meta.url)).text();
+const origin = "http://shelf.test";
+const defaultView = { filter: "all", order: "added" } as const;
+const defaultAction = (path: string) => `${path}?filter=all&order=added`;
+const defaultRenderedAction = (path: string) => defaultAction(path).replaceAll("&", "&amp;");
+const renderPage = (books: Book[]) => page(books, defaultView);
+
+class TestHtmlFormElement {
+  constructor(
+    readonly method: string,
+    readonly action: string,
+    readonly classes: Set<string>,
+    readonly controls: Array<{ label: string; name: string; value: string }>,
+  ) {}
+
+  readonly classList = {
+    contains: (name: string) => this.classes.has(name),
+  };
+
+  setValue(label: string, value: string) {
+    const control = this.controls.find((candidate) => candidate.label === label);
+    if (!control) throw new Error(`Rendered form has no ${label} control`);
+    control.value = value;
+  }
+}
+
+class TestFormData extends FormData {
+  readonly fields: Record<string, string>;
+
+  constructor(form: TestHtmlFormElement) {
+    super();
+    this.fields = Object.fromEntries(form.controls.map(({ name, value }) => [name, value]));
+    for (const [name, value] of Object.entries(this.fields)) this.append(name, value);
+  }
+}
+
+class TestSubmitEvent {
+  defaultPrevented = false;
+
+  constructor(readonly target: TestHtmlFormElement) {}
+
+  preventDefault() {
+    this.defaultPrevented = true;
+  }
+}
+
+class TestDocument {
+  handler?: (event: TestSubmitEvent) => Promise<void>;
+  readonly replacements: string[] = [];
+  currentMain: TestMain;
+
+  constructor(html: string) {
+    this.currentMain = new TestMain(this, mainMarkup(html));
+  }
+
+  addEventListener(type: string, handler: (event: TestSubmitEvent) => Promise<void>) {
+    if (type === "submit") this.handler = handler;
+  }
+
+  querySelector(selector: string) {
+    if (selector === "main") return this.currentMain;
+    return null;
+  }
+
+  page(html: string) {
+    return {
+      querySelector: (selector: string) => {
+        if (selector !== "main") return null;
+        const markup = maybeMainMarkup(html);
+        return markup ? new TestMain(this, markup) : null;
+      },
+    };
+  }
+}
+
+class TestMain {
+  constructor(
+    private readonly document: TestDocument,
+    readonly markup: string,
+  ) {}
+
+  replaceWith(next: TestMain) {
+    this.document.replacements.push(next.markup);
+    this.document.currentMain = next;
+  }
+}
+
+function maybeMainMarkup(html: string) {
+  const start = html.indexOf("<main>");
+  const end = html.indexOf("</main>", start);
+  if (start < 0 || end < 0) return null;
+  return html.slice(start, end + "</main>".length);
+}
+
+function mainMarkup(html: string) {
+  const markup = maybeMainMarkup(html);
+  if (!markup) throw new Error("Rendered page has no main element");
+  return markup;
+}
+
+function emptyStateContents(html: string) {
+  return html.match(/<div class="empty">([\s\S]*?)<\/div>/)?.[1];
+}
+
+function attribute(openingTag: string, name: string) {
+  return openingTag.match(new RegExp(`${name}="([^"]*)"`))?.[1]?.replaceAll("&amp;", "&");
+}
+
+function renderedForm(html: string, action: string) {
+  const encodedAction = action.replaceAll("&", "&amp;");
+  const actionIndex = html.indexOf(`action="${encodedAction}"`);
+  if (actionIndex < 0) throw new Error(`Rendered page has no form for ${action}`);
+  const start = html.lastIndexOf("<form", actionIndex);
+  const openingEnd = html.indexOf(">", actionIndex);
+  const end = html.indexOf("</form>", openingEnd);
+  const openingTag = html.slice(start, openingEnd + 1);
+  const formMarkup = html.slice(start, end + "</form>".length);
+  const classes = new Set((attribute(openingTag, "class") ?? "").split(/\s+/).filter(Boolean));
+  const controls = [...formMarkup.matchAll(/<input\b[^>]*>/g)].flatMap((match) => {
+    const name = attribute(match[0], "name");
+    if (!name) return [];
+    const labelStart = formMarkup.lastIndexOf("<label>", match.index);
+    const label = labelStart < 0 ? "" : formMarkup.slice(labelStart + "<label>".length, match.index);
+    return [{ label, name, value: attribute(match[0], "value") ?? "" }];
+  });
+
+  return new TestHtmlFormElement(
+    attribute(openingTag, "method") ?? "get",
+    new URL(action, origin).href,
+    classes,
+    controls,
+  );
+}
+
+function renderedMutationForm(html: string, operation: "toggle" | "delete") {
+  const action = html.match(new RegExp(`action="([^"]+/${operation}(?:\\?[^\"]*)?)"`))?.[1]
+    ?.replaceAll("&amp;", "&");
+  if (!action) throw new Error(`Rendered page has no ${operation} form`);
+  return renderedForm(html, action);
+}
+
+function renderedBook(html: string, title: string) {
+  const titleIndex = html.indexOf(`<strong>${title}</strong>`);
+  if (titleIndex < 0) throw new Error(`Rendered page has no ${title} book`);
+  const start = html.lastIndexOf("<li", titleIndex);
+  const end = html.indexOf("</li>", titleIndex);
+  return html.slice(start, end + "</li>".length);
+}
+
+function book(id: bigint, title: string, read = false): Book {
+  const checkedId = bookId(id);
+  if (checkedId === null) throw new Error(`Invalid test book ID: ${id}`);
+  return {
+    id: checkedId,
+    title,
+    author: "Test Author",
+    read,
+    createdAt: "2026-01-01 00:00:00",
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+function clientHarness(
+  initialPage: string,
+  fetch: (url: string, options: { method: string; body: TestFormData }) => Promise<Response>,
+  confirm = () => true,
+) {
+  const document = new TestDocument(initialPage);
+  let reloads = 0;
+  class TestDomParser {
+    parseFromString(html: string) {
+      return document.page(html);
+    }
+  }
+
+  new Function(
+    "document",
+    "HTMLFormElement",
+    "confirm",
+    "fetch",
+    "FormData",
+    "DOMParser",
+    "window",
+    appSource,
+  )(
+    document,
+    TestHtmlFormElement,
+    confirm,
+    fetch,
+    TestFormData,
+    TestDomParser,
+    { location: { reload: () => reloads++ } },
+  );
+
+  if (!document.handler) throw new Error("Client script did not register a submit handler");
+  return { document, submit: document.handler, reloads: () => reloads };
+}
+
+function serverBackedClient(
+  initialPage: string,
+  app: ReturnType<typeof startServer>,
+  requests: string[],
+) {
+  return clientHarness(initialPage, async (url, options) => {
+    requests.push(url);
+    const requestUrl = new URL(url);
+    return fetch(new URL(`${requestUrl.pathname}${requestUrl.search}`, app.server.url), {
+      method: options.method,
+      body: options.body,
+    });
+  });
+}
+
+async function addServerBook(app: ReturnType<typeof startServer>) {
+  const response = await fetch(new URL("/books", app.server.url), {
+    method: "POST",
+    body: new URLSearchParams({ title: "Kindred", author: "Octavia E. Butler" }),
+  });
+  return response.text();
+}
+
+describe("browser shelf mutations", () => {
+  test("leaves the rendered view controls to native GET navigation", async () => {
+    const initialPage = renderPage([]);
+    let requests = 0;
+    const client = clientHarness(initialPage, async () => {
+      requests++;
+      return new Response(renderPage([]));
+    });
+    const event = new TestSubmitEvent(renderedForm(initialPage, "/"));
+
+    await client.submit(event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(requests).toBe(0);
+    expect(client.document.replacements).toEqual([]);
+    expect(client.document.currentMain.markup).toBe(mainMarkup(initialPage));
+    expect(client.reloads()).toBe(0);
+  });
+
+  test("adds the first book in place without navigating", async () => {
+    const app = startServer({ port: 0, dbPath: ":memory:" });
+    try {
+      const initialPage = renderPage([]);
+      const requests: string[] = [];
+      const client = serverBackedClient(initialPage, app, requests);
+      const form = renderedForm(initialPage, defaultAction("/books"));
+      form.setValue("Title", "Kindred");
+      form.setValue("Author", "Octavia E. Butler");
+      const event = new TestSubmitEvent(form);
+
+      await client.submit(event);
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(client.reloads()).toBe(0);
+      expect(requests).toEqual([`${origin}${defaultAction("/books")}`]);
+      expect(client.document.currentMain.markup).toContain("Kindred");
+      expect(client.document.currentMain.markup).toContain("<b>0</b> of 1 read");
+      expect(client.document.currentMain.markup).not.toContain("Your shelf is empty");
+    } finally {
+      app.close();
+    }
+  });
+
+  test("serializes overlapping add, toggle, and delete mutations", async () => {
+    const existing = book(1n, "Kindred");
+    const added = book(2n, "Submitted title");
+    const initialPage = renderPage([existing]);
+    const toggleResponse = deferred<Response>();
+    const addResponse = deferred<Response>();
+    const deleteResponse = deferred<Response>();
+    const toggleDispatched = deferred<void>();
+    const addDispatched = deferred<void>();
+    const deleteDispatched = deferred<void>();
+    const requests: Array<{ url: string; body: Record<string, string> }> = [];
+    const client = clientHarness(initialPage, (url, options) => {
+      requests.push({ url, body: options.body.fields });
+      if (new URL(url).pathname.endsWith("/toggle")) {
+        toggleDispatched.resolve();
+        return toggleResponse.promise;
+      }
+      if (new URL(url).pathname.endsWith("/delete")) {
+        deleteDispatched.resolve();
+        return deleteResponse.promise;
+      }
+      addDispatched.resolve();
+      return addResponse.promise;
+    });
+    const toggle = new TestSubmitEvent(
+      renderedForm(initialPage, defaultAction("/books/1/toggle")),
+    );
+    const addForm = renderedForm(initialPage, defaultAction("/books"));
+    addForm.setValue("Title", "Submitted title");
+    addForm.setValue("Author", "Submitted author");
+    const add = new TestSubmitEvent(addForm);
+    const remove = new TestSubmitEvent(
+      renderedForm(initialPage, defaultAction("/books/1/delete")),
+    );
+
+    const toggleSubmission = client.submit(toggle);
+    const addSubmission = client.submit(add);
+    addForm.setValue("Title", "Edited after submit");
+    addForm.setValue("Author", "Edited author");
+
+    await toggleDispatched.promise;
+    expect(requests).toEqual([
+      { url: `${origin}${defaultAction("/books/1/toggle")}`, body: {} },
+    ]);
+    toggleResponse.resolve(new Response(renderPage([{ ...existing, read: true }])));
+
+    await addDispatched.promise;
+    expect(requests).toEqual([
+      { url: `${origin}${defaultAction("/books/1/toggle")}`, body: {} },
+      {
+        url: `${origin}${defaultAction("/books")}`,
+        body: { title: "Submitted title", author: "Submitted author" },
+      },
+    ]);
+
+    const deleteSubmission = client.submit(remove);
+    await Promise.resolve();
+    expect(requests).toHaveLength(2);
+    addResponse.resolve(new Response(renderPage([added, { ...existing, read: true }])));
+
+    await deleteDispatched.promise;
+    expect(requests).toEqual([
+      { url: `${origin}${defaultAction("/books/1/toggle")}`, body: {} },
+      {
+        url: `${origin}${defaultAction("/books")}`,
+        body: { title: "Submitted title", author: "Submitted author" },
+      },
+      { url: `${origin}${defaultAction("/books/1/delete")}`, body: {} },
+    ]);
+    deleteResponse.resolve(new Response(renderPage([added])));
+    await Promise.all([toggleSubmission, addSubmission, deleteSubmission]);
+
+    expect(client.document.currentMain.markup).toContain("Submitted title");
+    expect(client.document.currentMain.markup).toContain("<b>0</b> of 1 read");
+    expect(client.document.currentMain.markup).not.toContain("Kindred");
+    expect(client.reloads()).toBe(0);
+  });
+
+  test("preserves exact large IDs through rendered toggle and delete mutations", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "shelf-large-ids-"));
+    const dbPath = join(directory, "shelf.db");
+    const schema = openShelf(dbPath);
+    schema.close();
+    const seed = new Database(dbPath);
+    seed
+      .query("INSERT INTO books (id, title, author) VALUES (?, ?, ?)")
+      .run(9007199254740992n, "First adjacent ID", "Test Author");
+    seed
+      .query("INSERT INTO books (id, title, author) VALUES (?, ?, ?)")
+      .run(9007199254740993n, "Second adjacent ID", "Test Author");
+    seed.close();
+
+    const app = startServer({ port: 0, dbPath });
+    try {
+      const initialPage = await (await fetch(app.server.url)).text();
+      const requests: string[] = [];
+      const client = serverBackedClient(initialPage, app, requests);
+
+      expect(renderedBook(initialPage, "First adjacent ID")).toContain(
+        `action="${defaultRenderedAction("/books/9007199254740992/toggle")}"`,
+      );
+      expect(renderedBook(initialPage, "Second adjacent ID")).toContain(
+        `action="${defaultRenderedAction("/books/9007199254740993/toggle")}"`,
+      );
+      await client.submit(
+        new TestSubmitEvent(
+          renderedForm(
+            client.document.currentMain.markup,
+            defaultAction("/books/9007199254740993/toggle"),
+          ),
+        ),
+      );
+
+      expect(requests).toEqual([
+        `${origin}${defaultAction("/books/9007199254740993/toggle")}`,
+      ]);
+      expect(renderedBook(client.document.currentMain.markup, "First adjacent ID")).toStartWith(
+        '<li class="book">',
+      );
+      expect(renderedBook(client.document.currentMain.markup, "Second adjacent ID")).toStartWith(
+        '<li class="book is-read">',
+      );
+
+      await client.submit(
+        new TestSubmitEvent(
+          renderedForm(
+            client.document.currentMain.markup,
+            defaultAction("/books/9007199254740993/delete"),
+          ),
+        ),
+      );
+
+      expect(requests).toEqual([
+        `${origin}${defaultAction("/books/9007199254740993/toggle")}`,
+        `${origin}${defaultAction("/books/9007199254740993/delete")}`,
+      ]);
+      expect(client.document.currentMain.markup).toContain("First adjacent ID");
+      expect(client.document.currentMain.markup).not.toContain("Second adjacent ID");
+      expect(client.reloads()).toBe(0);
+    } finally {
+      app.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps HTTP mutations within digit-only SQLite IDs", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "shelf-out-of-range-ids-"));
+    const dbPath = join(directory, "shelf.db");
+    const schema = openShelf(dbPath);
+    schema.close();
+    const seed = new Database(dbPath);
+    seed
+      .query("INSERT INTO books (id, title, author) VALUES (?, ?, ?)")
+      .run(-9223372036854775808n, "Minimum ID", "Test Author");
+    seed
+      .query("INSERT INTO books (id, title, author) VALUES (?, ?, ?)")
+      .run(9223372036854775807n, "Maximum ID", "Test Author");
+    seed.close();
+
+    const app = startServer({ port: 0, dbPath });
+    try {
+      for (const id of [
+        -9223372036854775809n,
+        -9223372036854775808n,
+        9223372036854775808n,
+      ]) {
+        for (const operation of ["toggle", "delete"]) {
+          const response = await fetch(new URL(`/books/${id}/${operation}`, app.server.url), {
+            method: "POST",
+            redirect: "manual",
+          });
+          expect(response.status).toBe(404);
+
+          const shelfPage = await (await fetch(app.server.url)).text();
+          expect(renderedBook(shelfPage, "Minimum ID")).toStartWith('<li class="book">');
+          expect(renderedBook(shelfPage, "Maximum ID")).toStartWith('<li class="book">');
+        }
+      }
+
+      const maximumToggle = await fetch(
+        new URL("/books/9223372036854775807/toggle", app.server.url),
+        { method: "POST", redirect: "manual" },
+      );
+      expect(maximumToggle.status).toBe(303);
+      const maximumToggledPage = await (await fetch(app.server.url)).text();
+      expect(renderedBook(maximumToggledPage, "Maximum ID")).toStartWith(
+        '<li class="book is-read">',
+      );
+      expect(renderedBook(maximumToggledPage, "Minimum ID")).toStartWith('<li class="book">');
+    } finally {
+      app.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("confirms a rendered delete before submitting it", async () => {
+    const initialPage = renderPage([book(1n, "Kindred")]);
+    let requests = 0;
+    let confirmations = 0;
+    const client = clientHarness(
+      initialPage,
+      async () => {
+        requests++;
+        return new Response(renderPage([]));
+      },
+      () => {
+        confirmations++;
+        return false;
+      },
+    );
+    const form = renderedForm(initialPage, defaultAction("/books/1/delete"));
+    const event = new TestSubmitEvent(form);
+
+    await client.submit(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(confirmations).toBe(1);
+    expect(requests).toBe(0);
+    expect(client.document.replacements).toEqual([]);
+    expect(client.reloads()).toBe(0);
+  });
+
+  test("deletes the final book in place", async () => {
+    const app = startServer({ port: 0, dbPath: ":memory:" });
+    try {
+      const initialPage = await addServerBook(app);
+      const requests: string[] = [];
+      const client = serverBackedClient(initialPage, app, requests);
+      const event = new TestSubmitEvent(renderedMutationForm(initialPage, "delete"));
+
+      await client.submit(event);
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(requests).toEqual([`${origin}${defaultAction("/books/1/delete")}`]);
+      expect(client.reloads()).toBe(0);
+      expect(emptyStateContents(client.document.currentMain.markup)).toBe(
+        "<p>Your shelf is empty. Add your first book above.</p>",
+      );
+      expect(client.document.currentMain.markup).not.toContain('class="count"');
+    } finally {
+      app.close();
+    }
+  });
+
+  test("toggles a rendered book in place", async () => {
+    const app = startServer({ port: 0, dbPath: ":memory:" });
+    try {
+      await addServerBook(app);
+      const activeView = "filter=all&order=title";
+      const initialPage = await (
+        await fetch(new URL(`/?${activeView}`, app.server.url))
+      ).text();
+      const requests: string[] = [];
+      const client = serverBackedClient(initialPage, app, requests);
+      const event = new TestSubmitEvent(renderedMutationForm(initialPage, "toggle"));
+
+      await client.submit(event);
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(requests).toEqual([`${origin}/books/1/toggle?${activeView}`]);
+      expect(client.reloads()).toBe(0);
+      expect(client.document.currentMain.markup).toContain('class="book is-read"');
+      expect(client.document.currentMain.markup).toContain('<b>1</b> of 1 read');
+      expect(client.document.currentMain.markup).toContain(
+        'aria-label="Mark Kindred as unread (book 1)"',
+      );
+      expect(client.document.currentMain.markup).toContain('<option value="title" selected>');
+    } finally {
+      app.close();
+    }
+  });
+
+  test("reloads when a mutation cannot be confirmed", async () => {
+    const initialPage = renderPage([]);
+    const client = clientHarness(initialPage, async () => {
+      throw new Error("network unavailable");
+    });
+    const form = renderedForm(initialPage, defaultAction("/books"));
+    form.setValue("Title", "Kindred");
+    form.setValue("Author", "Octavia E. Butler");
+    await client.submit(new TestSubmitEvent(form));
+
+    expect(client.document.replacements).toEqual([]);
+    expect(client.reloads()).toBe(1);
+  });
+
+  test("reloads when a mutation response has no page content", async () => {
+    const initialPage = renderPage([book(1n, "Kindred")]);
+    const client = clientHarness(initialPage, async () => new Response("Not a shelf page"));
+
+    await client.submit(
+      new TestSubmitEvent(renderedForm(initialPage, defaultAction("/books/1/toggle"))),
+    );
+
+    expect(client.document.replacements).toEqual([]);
+    expect(client.reloads()).toBe(1);
+  });
+});
