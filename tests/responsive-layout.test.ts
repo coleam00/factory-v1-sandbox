@@ -350,7 +350,11 @@ test(
       })) as {
         result: { value: { count: string; action: string; isRead: boolean } };
       };
-      expect(readState.result.value).toEqual({ count: "1 of 1 read", action: "Mark unread", isRead: true });
+      expect(readState.result.value).toEqual({
+        count: "1 of 1 read",
+        action: `Mark ${title} as unread (book 1)`,
+        isRead: true,
+      });
 
       const dialog = cdp.event("Page.javascriptDialogOpening");
       const deleted = cdp.event("Page.loadEventFired");
