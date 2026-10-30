@@ -115,6 +115,20 @@ describe("HTTP routes", () => {
     expect((await fetch(`${base}/missing`)).status).toBe(404);
   });
 
+  test("redirects mutation requests with ids outside SQLite's range", async () => {
+    const firstExcludedId = 9223372036854775808n;
+
+    for (const action of ["toggle", "delete"] as const) {
+      const response = await fetch(`${base}/books/${firstExcludedId}/${action}`, {
+        method: "POST",
+        redirect: "manual",
+      });
+      expect(response.status).toBe(303);
+    }
+
+    expect((await fetch(base)).status).toBe(200);
+  });
+
   test("keeps whitespace-distinct book toggle names distinguishable", async () => {
     const whitespaceApp = startServer({ port: 0, dbPath: ":memory:" });
     const whitespaceBase = whitespaceApp.server.url.origin;

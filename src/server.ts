@@ -3,6 +3,7 @@ import { openShelf } from "./db";
 import { page } from "./views";
 
 const publicDir = join(import.meta.dir, "..", "public");
+const maximumBookId = 9223372036854775807n;
 const html = (body: string, status = 200) =>
   new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8" } });
 const redirect = () => Response.redirect("/", 303);
@@ -30,6 +31,7 @@ export function startServer(options: { port?: number; dbPath?: string } = {}) {
       const match = url.pathname.match(/^\/books\/(\d+)\/(toggle|delete)$/);
       if (request.method === "POST" && match) {
         const id = BigInt(match[1]);
+        if (id > maximumBookId) return redirect();
         match[2] === "toggle" ? shelf.toggle(id) : shelf.remove(id);
         return redirect();
       }
