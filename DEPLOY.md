@@ -39,3 +39,5 @@ Record these responses and the non-secret deployment record at
 `C:/Users/colem/OpenSource/v1test-runtime/deployment/running.json` as evidence.
 On failure, report it. Do not change the requested revision, substitute another
 port, overwrite an existing deployment, or stop any process by name.
+
+<!-- Protected-path acceptance control. No executable deployment behavior changes. -->
