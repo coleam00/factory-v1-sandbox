@@ -20,7 +20,7 @@ bun test
 bun run typecheck
 ```
 
-When Chrome or Chromium is installed, `bun test` also runs the responsive browser regression. Set `CHROME_PATH` when its executable is not in a standard system location; without a browser, that regression is skipped.
+`bun test` also runs the responsive browser regression when `CHROME_PATH` is set or Chrome/Chromium is found in one of the test's built-in locations. Set `CHROME_PATH` for every other installation; when no supported browser executable is found, that regression is skipped.
 
 ## Factory
 
