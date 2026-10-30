@@ -18,7 +18,8 @@ export type Book = {
   createdAt: string;
 };
 
-type BookRow = Omit<Book, "read" | "createdAt"> & {
+type BookRow = Omit<Book, "id" | "read" | "createdAt"> & {
+  id: bigint;
   read: bigint;
   created_at: string;
 };
@@ -39,7 +40,7 @@ export function openShelf(path = process.env.SHELF_DB ?? "shelf.db") {
   const list = db.query<BookRow, []>(
     "SELECT id, title, author, read, created_at FROM books ORDER BY id DESC",
   );
-  const insert = db.query<{ id: BookId }, [string, string]>(
+  const insert = db.query<{ id: bigint }, [string, string]>(
     "INSERT INTO books (title, author) VALUES (?, ?) RETURNING id",
   );
   const toggle = db.query(
@@ -49,14 +50,26 @@ export function openShelf(path = process.env.SHELF_DB ?? "shelf.db") {
 
   return {
     list(): Book[] {
-      return list.all().map(({ created_at, read, ...book }) => ({
-        ...book,
-        read: Boolean(read),
-        createdAt: created_at,
-      }));
+      return list.all().map(({ id: rawId, created_at, read, ...book }) => {
+        const id = bookId(rawId);
+        if (id === null) {
+          throw new RangeError(`SQLite returned an out-of-range book ID: ${rawId}`);
+        }
+        return {
+          ...book,
+          id,
+          read: Boolean(read),
+          createdAt: created_at,
+        };
+      });
     },
     add(title: string, author: string) {
-      return insert.get(title.trim(), author.trim())!.id;
+      const rawId = insert.get(title.trim(), author.trim())!.id;
+      const id = bookId(rawId);
+      if (id === null) {
+        throw new RangeError(`SQLite returned an out-of-range book ID: ${rawId}`);
+      }
+      return id;
     },
     toggle(id: BookId) {
       return toggle.run(id).changes === 1;
