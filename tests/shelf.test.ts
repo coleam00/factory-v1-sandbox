@@ -354,6 +354,47 @@ describe("HTTP routes", () => {
     expect(body).toContain("Dune");
     expect(body).toContain("<b>0</b> of 1 read");
   });
+  for (const action of mutationActions) {
+    test(`${action} preserves the existing zero-ID success flow`, async () => {
+      const directory = mkdtempSync(join(tmpdir(), "shelf-test-"));
+      const dbPath = join(directory, "shelf.db");
+      const isolatedApp = startServer({ port: 0, dbPath });
+      const inspectionDb = new Database(dbPath);
+
+      try {
+        const insert = inspectionDb.query(
+          "INSERT INTO books (id, title, author) VALUES (?, ?, ?)",
+        );
+        insert.run(0, "Zero", "Target");
+        insert.run(1, "Control", "Must Not Change");
+
+        const response = await fetch(`${isolatedApp.server.url}books/0/${action}`, {
+          method: "POST",
+          redirect: "manual",
+        });
+        expect(response.status).toBe(303);
+        expect(response.headers.get("location")).toBe("/");
+
+        const rows = inspectionDb
+          .query<{ id: string; read: number }, []>(
+            "SELECT CAST(id AS TEXT) AS id, read FROM books ORDER BY id",
+          )
+          .all();
+        expect(rows).toEqual(
+          action === "toggle"
+            ? [
+                { id: "0", read: 1 },
+                { id: "1", read: 0 },
+              ]
+            : [{ id: "1", read: 0 }],
+        );
+      } finally {
+        inspectionDb.close();
+        isolatedApp.close();
+        rmSync(directory, { recursive: true, force: true });
+      }
+    });
+  }
 
   test("returns 404 for mutation requests with ids outside SQLite's range", async () => {
     const firstExcludedId = 9223372036854775808n;
@@ -462,11 +503,13 @@ describe("HTTP routes", () => {
     }
   });
 
-  test("preserves adjacent 64-bit book ids through rendering and mutations", async () => {
+  test("preserves exact 64-bit book ids through missing and successful mutations", async () => {
     const directory = mkdtempSync(join(tmpdir(), "shelf-book-id-"));
     const dbPath = join(directory, "shelf.db");
     const firstId = 9007199254740992n;
     const secondId = 9007199254740993n;
+    const aliasProneMissingId = 9007199254740995n;
+    const roundedNeighborId = 9007199254740996n;
     const shelf = openShelf(dbPath);
     shelf.close();
 
@@ -487,10 +530,37 @@ describe("HTTP routes", () => {
       exactShelf.close();
     }
 
+    const inspectionDb = new Database(dbPath);
+    inspectionDb
+      .query("INSERT INTO books (id, title, author) VALUES (?, ?, ?)")
+      .run(roundedNeighborId, "Rounded Neighbor", "Must Not Change");
+
     const boundaryApp = startServer({ port: 0, dbPath });
     const boundaryBase = boundaryApp.server.url.origin;
+    const books = () =>
+      inspectionDb
+        .query<
+          { id: string; title: string; author: string; read: number; created_at: string },
+          []
+        >(
+          "SELECT CAST(id AS TEXT) AS id, title, author, read, created_at FROM books ORDER BY id",
+        )
+        .all();
 
     try {
+      const beforeMissingMutations = books();
+      for (const action of mutationActions) {
+        const response = await fetch(
+          `${boundaryBase}/books/${aliasProneMissingId}/${action}`,
+          {
+            method: "POST",
+            redirect: "manual",
+          },
+        );
+        expect(response.status).toBe(404);
+        expect(books()).toEqual(beforeMissingMutations);
+      }
+
       let body = await (await fetch(boundaryBase)).text();
       const firstName = ariaLabel(toggleForm(body, firstId));
       const secondName = ariaLabel(toggleForm(body, secondId));
@@ -518,6 +588,7 @@ describe("HTTP routes", () => {
       expect(body).not.toContain(`/books/${secondId}/toggle`);
       expect(ariaLabel(toggleForm(body, firstId))).toContain(" as read ");
     } finally {
+      inspectionDb.close();
       boundaryApp.close();
       rmSync(directory, { recursive: true, force: true });
     }
