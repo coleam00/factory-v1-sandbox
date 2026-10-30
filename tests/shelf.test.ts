@@ -25,6 +25,25 @@ const ariaLabel = (element: string) => {
 };
 
 describe("page", () => {
+  test("shows the backup download for empty and populated shelves", () => {
+    const populatedShelf = [
+      {
+        id: bookId(1n)!,
+        title: "Dune",
+        author: "Frank Herbert",
+        read: false,
+        createdAt: "2026-10-29 00:00:00",
+      },
+    ];
+
+    for (const books of [[], populatedShelf]) {
+      const body = page(books, { filter: "all", order: "added" });
+      expect(body).toContain(
+        '<a class="backup-link" href="/books/export.json">Download backup</a>',
+      );
+    }
+  });
+
   test("names each read toggle for its book and next action", () => {
     const body = page([
       {
@@ -596,10 +615,15 @@ describe("HTTP routes", () => {
 });
 
 describe("JSON export", () => {
-  test("downloads an empty shelf", async () => {
+  test("the rendered backup link downloads an empty shelf", async () => {
     const app = startServer({ port: 0, dbPath: ":memory:" });
     try {
-      const response = await fetch(`${app.server.url.origin}/books/export.json`);
+      const pageResponse = await fetch(app.server.url);
+      expect(await pageResponse.text()).toContain(
+        '<a class="backup-link" href="/books/export.json">Download backup</a>',
+      );
+
+      const response = await fetch(new URL("/books/export.json", app.server.url));
       expect(response.status).toBe(200);
       expect(response.headers.get("content-type")).toStartWith("application/json");
       expect(response.headers.get("content-disposition")).toBe(
