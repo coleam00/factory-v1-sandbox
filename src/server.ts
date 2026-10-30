@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { bookFields, maxBookFieldLength } from "./book-fields";
 import { bookId, openShelf } from "./db";
 import { parseView, viewLocation } from "./view-state";
 import { page } from "./views";
@@ -9,6 +10,28 @@ const html = (body: string, status = 200) =>
 const redirect = (location: string) => Response.redirect(location, 303);
 const parseRevision = (value: string | undefined) =>
   value && /^[0-9a-f]{40}$/i.test(value) ? value.toLowerCase() : null;
+const codePointLength = (value: string) => [...value].length;
+
+type BookFormResult =
+  | { book: { title: string; author: string } }
+  | { error: string };
+
+const decodeBookForm = (form: FormData): BookFormResult => {
+  const title = String(form.get(bookFields.title.name) ?? "").trim();
+  const author = String(form.get(bookFields.author.name) ?? "").trim();
+
+  if (!title || !author) {
+    return { error: "Title and author are required." };
+  }
+  if (codePointLength(title) > maxBookFieldLength) {
+    return { error: `Title must be ${maxBookFieldLength} characters or fewer.` };
+  }
+  if (codePointLength(author) > maxBookFieldLength) {
+    return { error: `Author must be ${maxBookFieldLength} characters or fewer.` };
+  }
+
+  return { book: { title, author } };
+};
 
 export function startServer(options: { port?: number; dbPath?: string } = {}) {
   const revision = parseRevision(process.env.APP_REVISION);
@@ -41,12 +64,11 @@ export function startServer(options: { port?: number; dbPath?: string } = {}) {
       }
       if (request.method === "POST" && url.pathname === "/books") {
         const form = await request.formData();
-        const title = String(form.get("title") ?? "").trim();
-        const author = String(form.get("author") ?? "").trim();
-        if (!title || !author) {
-          return html(page(shelf.list(), view, "Title and author are required."), 400);
+        const result = decodeBookForm(form);
+        if ("error" in result) {
+          return html(page(shelf.list(), view, result.error), 400);
         }
-        shelf.add(title.slice(0, 200), author.slice(0, 200));
+        shelf.add(result.book.title, result.book.author);
         return redirect(viewLocation(url, view));
       }
 

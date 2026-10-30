@@ -1,8 +1,9 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { maxBookFieldLength } from "../src/book-fields";
 import { bookId, openShelf } from "../src/db";
 import { startServer } from "../src/server";
 import { page } from "../src/views";
@@ -107,6 +108,14 @@ function expectEmptyShelf(html: string) {
 
 const originalRevision = process.env.APP_REVISION;
 const mutationActions = ["toggle", "delete"] as const;
+
+function tagForNamedInput(body: string, name: string) {
+  return body.match(new RegExp(`<input\\b[^>]*\\bname="${name}"[^>]*>`))?.[0];
+}
+
+function attribute(tag: string | undefined, name: string) {
+  return tag?.match(new RegExp(`\\b${name}="([^"]+)"`))?.[1];
+}
 
 function startWithRevision(revision?: string) {
   if (revision === undefined) delete process.env.APP_REVISION;
@@ -234,16 +243,32 @@ describe("HTTP routes", () => {
   let app: ReturnType<typeof startServer>;
   let base: string;
 
-  beforeAll(() => {
+  beforeEach(() => {
     app = startWithRevision();
     base = app.server.url.origin;
   });
-  afterAll(() => app.close());
+  afterEach(() => app.close());
+
+  const addBook = (title: string, author: string) =>
+    fetch(`${base}/books`, {
+      method: "POST",
+      body: new URLSearchParams({ title, author }),
+      redirect: "manual",
+    });
 
   test("renders, creates, toggles, and deletes a book", async () => {
     let response = await fetch(base);
     let body = await response.text();
     expectEmptyShelf(body);
+    expect(body).toContain(
+      `Title and author can each be up to ${maxBookFieldLength} characters after trimming.`,
+    );
+    const guidanceId = body.match(/<p class="add-guidance" id="([^"]+)">/)?.[1];
+    expect(guidanceId).toBeTruthy();
+    for (const field of ["title", "author"]) {
+      expect(attribute(tagForNamedInput(body, field), "aria-describedby")).toBe(guidanceId);
+    }
+    expect(body).not.toMatch(/\bmaxlength\s*=/i);
     const { skipLinks, idOwners } = await readActiveSkipLinkEndpoints(body);
     expect(skipLinks).toHaveLength(1);
     expect(skipLinks[0]!.text.trim()).toBe("Skip to books");
@@ -259,11 +284,7 @@ describe("HTTP routes", () => {
     const targetHeadings = await readActiveTargetHeadings(body, targetId);
     expect(targetHeadings.map((heading) => heading.trim())).toEqual(["Books"]);
 
-    response = await fetch(`${base}/books`, {
-      method: "POST",
-      body: new URLSearchParams({ title: "Dune", author: "Frank Herbert" }),
-      redirect: "manual",
-    });
+    response = await addBook("Dune", "Frank Herbert");
     expect(response.status).toBe(303);
     expect(response.headers.get("location")).toBe("/");
 
@@ -286,14 +307,134 @@ describe("HTTP routes", () => {
   });
 
   test("validates input and returns 404s", async () => {
-    const invalid = await fetch(`${base}/books`, {
-      method: "POST",
-      body: new URLSearchParams({ title: "", author: "Nobody" }),
-    });
-    expect(invalid.status).toBe(400);
-    expect(await invalid.text()).toContain("Title and author are required");
+    for (const [title, author] of [
+      ["   ", "Nobody"],
+      ["Dune", "   "],
+    ]) {
+      const invalid = await addBook(title, author);
+      expect(invalid.status).toBe(400);
+      expect(await invalid.text()).toContain("Title and author are required");
+      expectEmptyShelf(await (await fetch(base)).text());
+    }
+
+    for (const omittedField of ["title", "author"] as const) {
+      const form = new FormData();
+      form.append(omittedField === "title" ? "author" : "title", "Valid text");
+
+      const response = await fetch(`${base}/books`, {
+        method: "POST",
+        body: form,
+      });
+      expect(response.status).toBe(400);
+      expect(await response.text()).toContain("Title and author are required");
+      expectEmptyShelf(await (await fetch(base)).text());
+    }
+
     expect((await fetch(`${base}/missing`)).status).toBe(404);
   });
+
+  test("accepts trimmed title and author fields at 200 characters", async () => {
+    expect(maxBookFieldLength).toBe(200);
+    const title = "T".repeat(maxBookFieldLength);
+    const author = "A".repeat(maxBookFieldLength);
+
+    const response = await addBook(` ${title} `, ` ${author} `);
+    expect(response.status).toBe(303);
+
+    const body = await (await fetch(base)).text();
+    expect(body).toContain(`<strong>${title}</strong>`);
+    expect(body).toContain(`<span>${author}</span>`);
+    expect(body).toContain("<b>0</b> of 1 read");
+
+    const unicodeBoundary = "📚".repeat(maxBookFieldLength);
+    for (const [unicodeTitle, unicodeAuthor] of [
+      [unicodeBoundary, "Valid author"],
+      ["Valid title", unicodeBoundary],
+    ]) {
+      const unicodeResponse = await addBook(` ${unicodeTitle} `, ` ${unicodeAuthor} `);
+      expect(unicodeResponse.status).toBe(303);
+
+      const unicodeBody = await (await fetch(base)).text();
+      expect(unicodeBody).toContain(`<strong>${unicodeTitle}</strong>`);
+      expect(unicodeBody).toContain(`<span>${unicodeAuthor}</span>`);
+    }
+  });
+
+  test("rejects overlong fields without changing the shelf", async () => {
+    expect((await addBook("Dune", "Frank Herbert")).status).toBe(303);
+    const activeView = "filter=all&order=title";
+
+    const attempts = [
+      {
+        title: "T".repeat(maxBookFieldLength + 1),
+        author: "Valid author",
+        message: `Title must be ${maxBookFieldLength} characters or fewer.`,
+      },
+      {
+        title: "Valid title",
+        author: "A".repeat(maxBookFieldLength + 1),
+        message: `Author must be ${maxBookFieldLength} characters or fewer.`,
+      },
+    ];
+
+    for (const attempt of attempts) {
+      const response = await fetch(`${base}/books?${activeView}`, {
+        method: "POST",
+        body: new URLSearchParams({ title: attempt.title, author: attempt.author }),
+      });
+      expect(response.status).toBe(400);
+      const body = await response.text();
+      expect(body).toContain(attempt.message);
+      expect(body).toContain("Dune");
+      expect(body).toContain("<b>0</b> of 1 read");
+      expect(body).toContain('action="/books?filter=all&amp;order=title"');
+    }
+
+    const body = await (await fetch(base)).text();
+    expect(body).toContain("Dune");
+    expect(body).toContain("<b>0</b> of 1 read");
+  });
+  for (const action of mutationActions) {
+    test(`${action} preserves the existing zero-ID success flow`, async () => {
+      const directory = mkdtempSync(join(tmpdir(), "shelf-test-"));
+      const dbPath = join(directory, "shelf.db");
+      const isolatedApp = startServer({ port: 0, dbPath });
+      const inspectionDb = new Database(dbPath);
+
+      try {
+        const insert = inspectionDb.query(
+          "INSERT INTO books (id, title, author) VALUES (?, ?, ?)",
+        );
+        insert.run(0, "Zero", "Target");
+        insert.run(1, "Control", "Must Not Change");
+
+        const response = await fetch(`${isolatedApp.server.url}books/0/${action}`, {
+          method: "POST",
+          redirect: "manual",
+        });
+        expect(response.status).toBe(303);
+        expect(response.headers.get("location")).toBe("/");
+
+        const rows = inspectionDb
+          .query<{ id: string; read: number }, []>(
+            "SELECT CAST(id AS TEXT) AS id, read FROM books ORDER BY id",
+          )
+          .all();
+        expect(rows).toEqual(
+          action === "toggle"
+            ? [
+                { id: "0", read: 1 },
+                { id: "1", read: 0 },
+              ]
+            : [{ id: "1", read: 0 }],
+        );
+      } finally {
+        inspectionDb.close();
+        isolatedApp.close();
+        rmSync(directory, { recursive: true, force: true });
+      }
+    });
+  }
 
   test("returns 404 for mutation requests with ids outside SQLite's range", async () => {
     const firstExcludedId = 9223372036854775808n;
@@ -402,11 +543,13 @@ describe("HTTP routes", () => {
     }
   });
 
-  test("preserves adjacent 64-bit book ids through rendering and mutations", async () => {
+  test("preserves exact 64-bit book ids through missing and successful mutations", async () => {
     const directory = mkdtempSync(join(tmpdir(), "shelf-book-id-"));
     const dbPath = join(directory, "shelf.db");
     const firstId = 9007199254740992n;
     const secondId = 9007199254740993n;
+    const aliasProneMissingId = 9007199254740995n;
+    const roundedNeighborId = 9007199254740996n;
     const shelf = openShelf(dbPath);
     shelf.close();
 
@@ -427,10 +570,37 @@ describe("HTTP routes", () => {
       exactShelf.close();
     }
 
+    const inspectionDb = new Database(dbPath);
+    inspectionDb
+      .query("INSERT INTO books (id, title, author) VALUES (?, ?, ?)")
+      .run(roundedNeighborId, "Rounded Neighbor", "Must Not Change");
+
     const boundaryApp = startServer({ port: 0, dbPath });
     const boundaryBase = boundaryApp.server.url.origin;
+    const books = () =>
+      inspectionDb
+        .query<
+          { id: string; title: string; author: string; read: number; created_at: string },
+          []
+        >(
+          "SELECT CAST(id AS TEXT) AS id, title, author, read, created_at FROM books ORDER BY id",
+        )
+        .all();
 
     try {
+      const beforeMissingMutations = books();
+      for (const action of mutationActions) {
+        const response = await fetch(
+          `${boundaryBase}/books/${aliasProneMissingId}/${action}`,
+          {
+            method: "POST",
+            redirect: "manual",
+          },
+        );
+        expect(response.status).toBe(404);
+        expect(books()).toEqual(beforeMissingMutations);
+      }
+
       let body = await (await fetch(boundaryBase)).text();
       const firstName = ariaLabel(toggleForm(body, firstId));
       const secondName = ariaLabel(toggleForm(body, secondId));
@@ -458,6 +628,7 @@ describe("HTTP routes", () => {
       expect(body).not.toContain(`/books/${secondId}/toggle`);
       expect(ariaLabel(toggleForm(body, firstId))).toContain(" as read ");
     } finally {
+      inspectionDb.close();
       boundaryApp.close();
       rmSync(directory, { recursive: true, force: true });
     }
