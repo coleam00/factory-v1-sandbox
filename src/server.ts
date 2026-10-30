@@ -10,6 +10,7 @@ const html = (body: string, status = 200) =>
 const redirect = (location: string) => Response.redirect(location, 303);
 const parseRevision = (value: string | undefined) =>
   value && /^[0-9a-f]{40}$/i.test(value) ? value.toLowerCase() : null;
+const codePointLength = (value: string) => [...value].length;
 
 type BookFormResult =
   | { book: { title: string; author: string } }
@@ -36,10 +37,10 @@ const decodeBookForm = (form: FormData): BookFormResult => {
   if (!title.value || !author.value) {
     return { error: "Title and author are required." };
   }
-  if (title.value.length > maxBookFieldLength) {
+  if (codePointLength(title.value) > maxBookFieldLength) {
     return { error: `Title must be ${maxBookFieldLength} characters or fewer.` };
   }
-  if (author.value.length > maxBookFieldLength) {
+  if (codePointLength(author.value) > maxBookFieldLength) {
     return { error: `Author must be ${maxBookFieldLength} characters or fewer.` };
   }
 

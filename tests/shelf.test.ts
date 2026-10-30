@@ -305,6 +305,19 @@ describe("HTTP routes", () => {
     expect(body).toContain(`<strong>${title}</strong>`);
     expect(body).toContain(`<span>${author}</span>`);
     expect(body).toContain("<b>0</b> of 1 read");
+
+    const unicodeBoundary = "📚".repeat(maxBookFieldLength);
+    for (const [unicodeTitle, unicodeAuthor] of [
+      [unicodeBoundary, "Valid author"],
+      ["Valid title", unicodeBoundary],
+    ]) {
+      const unicodeResponse = await addBook(` ${unicodeTitle} `, ` ${unicodeAuthor} `);
+      expect(unicodeResponse.status).toBe(303);
+
+      const unicodeBody = await (await fetch(base)).text();
+      expect(unicodeBody).toContain(`<strong>${unicodeTitle}</strong>`);
+      expect(unicodeBody).toContain(`<span>${unicodeAuthor}</span>`);
+    }
   });
 
   test("rejects overlong fields without changing the shelf", async () => {
