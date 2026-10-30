@@ -418,12 +418,20 @@ responsiveLayoutTest(
             }
             return true;
           };
-          const ownsInsetPoints = (element, rect) => [0.2, 0.5, 0.8].every((x) =>
-            [0.2, 0.5, 0.8].every((y) => element.contains(document.elementFromPoint(
-              rect.left + rect.width * x,
-              rect.top + rect.height * y,
-            )))
-          );
+          const ownsInsetPoints = (element, rect) => {
+            const x = (fraction) => rect.left + rect.width * fraction;
+            const y = (fraction) => rect.top + rect.height * fraction;
+            const points = [
+              [rect.left + 1, y(0.5)], [rect.right - 1, y(0.5)],
+              [x(0.5), rect.top + 1], [x(0.5), rect.bottom - 1],
+              [x(0.2), y(0.2)], [x(0.8), y(0.2)],
+              [x(0.2), y(0.8)], [x(0.8), y(0.8)],
+              [x(0.5), y(0.5)],
+            ];
+            return points.every(([pointX, pointY]) =>
+              element.contains(document.elementFromPoint(pointX, pointY))
+            );
+          };
           return [...document.querySelectorAll('.book button')].map((element) => {
             const rect = element.getBoundingClientRect();
             return {
