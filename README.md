@@ -22,6 +22,8 @@ bun test
 bun run typecheck
 ```
 
+`bun test` also runs the responsive browser regression when `CHROME_PATH` is set or Chrome/Chromium is found in one of the test's built-in locations. Set `CHROME_PATH` for every other installation; when no supported browser executable is found, that regression is skipped.
+
 ## Factory
 
 This repository adopts the project-scoped factory package alongside Archon's bundled SDLC pack. It does not copy or override files under `.archon/workflows/sdlc/`.
