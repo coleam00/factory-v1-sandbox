@@ -21,6 +21,7 @@ const readBookField = (
   field: (typeof bookFields)[keyof typeof bookFields],
 ) => {
   const entries = form.getAll(field.name);
+  if (entries.length === 0) return { value: "" } as const;
   if (entries.length !== 1 || typeof entries[0] !== "string") {
     return { error: `${field.label} must be submitted exactly once as text.` } as const;
   }
