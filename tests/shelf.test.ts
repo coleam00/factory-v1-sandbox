@@ -2,26 +2,6 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { openShelf } from "../src/db";
 import { startServer } from "../src/server";
 
-function decodeNumericCharacterReferences(value: string) {
-  return value.replace(
-    /&#(?:x([\da-f]+)|(\d+));?/gi,
-    (_, hexadecimal: string | undefined, decimal: string | undefined) => {
-      const codePoint = Number.parseInt(
-        hexadecimal ?? decimal!,
-        hexadecimal ? 16 : 10,
-      );
-      if (
-        codePoint === 0 ||
-        codePoint > 0x10ffff ||
-        (codePoint >= 0xd800 && codePoint <= 0xdfff)
-      ) {
-        return "\ufffd";
-      }
-      return String.fromCodePoint(codePoint);
-    },
-  );
-}
-
 const originalRevision = process.env.APP_REVISION;
 
 function startWithRevision(revision?: string) {
@@ -72,7 +52,7 @@ async function readActiveSkipLinkEndpoints(body: string) {
         const id = element.getAttribute("id");
         if (id === null) return;
         idOwners.push({
-          id: decodeNumericCharacterReferences(id),
+          id,
           tagName: element.tagName,
           tabindex: element.getAttribute("tabindex"),
         });
