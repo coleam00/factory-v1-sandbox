@@ -4,10 +4,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openShelf } from "../src/db";
-import { assertMutationHandlers } from "../src/mutation-routes";
+import { assertMutationHandlers, mutationActions } from "../src/mutation-routes";
 import { startServer } from "../src/server";
 
 const originalRevision = process.env.APP_REVISION;
+const mutationActionValues = Object.values(mutationActions);
 
 describe("mutation handler contract", () => {
   const handler = () => true;
@@ -240,7 +241,7 @@ describe("HTTP routes", () => {
 
       const activeView = "filter=all&order=title";
       for (const id of outOfRangeIds) {
-        for (const action of ["toggle", "delete"]) {
+        for (const action of mutationActionValues) {
           const response = await fetch(
             `${signedBase}/books/${id}/${action}?${activeView}`,
             { method: "POST", redirect: "manual" },
@@ -301,7 +302,7 @@ describe("HTTP routes", () => {
       });
       const shelfBefore = await (await fetch(`${base}/?${activeView}`)).text();
 
-      for (const action of ["toggle", "delete"] as const) {
+      for (const action of mutationActionValues) {
         const response = await fetch(`${base}/books/999/${action}?${activeView}`, {
           method: "POST",
           redirect: "manual",
