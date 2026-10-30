@@ -484,7 +484,7 @@ describe("JSON export", () => {
 
     const app = startServer({ port: 0, dbPath });
     try {
-      const response = await fetch(`${app.server.url.origin}/books/export.json`);
+      const response = await fetch(`${app.server.url.origin}/books/export.json?order=title`);
       const books = (await response.json()) as Array<{
         id: number;
         title: string;
@@ -521,16 +521,10 @@ describe("JSON export", () => {
       author: "Another Author",
       read: 1,
     };
-    const seed = new Database(dbPath, { create: true, safeIntegers: true });
-    seed.exec(`
-      CREATE TABLE books (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        title TEXT NOT NULL,
-        author TEXT NOT NULL,
-        read INTEGER NOT NULL DEFAULT 0 CHECK (read IN (0, 1)),
-        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
+    const shelf = openShelf(dbPath);
+    shelf.close();
+
+    const seed = new Database(dbPath, { safeIntegers: true });
     const insert = seed.query(
       "INSERT INTO books (id, title, author, read) VALUES (?, ?, ?, ?)",
     );
