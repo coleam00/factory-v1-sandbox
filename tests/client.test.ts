@@ -10,6 +10,10 @@ import { page } from "../src/views";
 
 const appSource = await Bun.file(new URL("../public/app.js", import.meta.url)).text();
 const origin = "http://shelf.test";
+const defaultView = { filter: "all", order: "added" } as const;
+const defaultAction = (path: string) => `${path}?filter=all&order=added`;
+const defaultRenderedAction = (path: string) => defaultAction(path).replaceAll("&", "&amp;");
+const renderPage = (books: Book[]) => page(books, defaultView);
 
 class TestHtmlFormElement {
   constructor(
@@ -109,11 +113,12 @@ function emptyStateContents(html: string) {
 }
 
 function attribute(openingTag: string, name: string) {
-  return openingTag.match(new RegExp(`${name}="([^"]*)"`))?.[1];
+  return openingTag.match(new RegExp(`${name}="([^"]*)"`))?.[1]?.replaceAll("&amp;", "&");
 }
 
 function renderedForm(html: string, action: string) {
-  const actionIndex = html.indexOf(`action="${action}"`);
+  const encodedAction = action.replaceAll("&", "&amp;");
+  const actionIndex = html.indexOf(`action="${encodedAction}"`);
   if (actionIndex < 0) throw new Error(`Rendered page has no form for ${action}`);
   const start = html.lastIndexOf("<form", actionIndex);
   const openingEnd = html.indexOf(">", actionIndex);
@@ -138,7 +143,8 @@ function renderedForm(html: string, action: string) {
 }
 
 function renderedMutationForm(html: string, operation: "toggle" | "delete") {
-  const action = html.match(new RegExp(`action="([^"]+/${operation})"`))?.[1];
+  const action = html.match(new RegExp(`action="([^"]+/${operation}(?:\\?[^\"]*)?)"`))?.[1]
+    ?.replaceAll("&amp;", "&");
   if (!action) throw new Error(`Rendered page has no ${operation} form`);
   return renderedForm(html, action);
 }
@@ -225,10 +231,10 @@ describe("browser shelf mutations", () => {
   test("adds the first book in place without navigating", async () => {
     const app = startServer({ port: 0, dbPath: ":memory:" });
     try {
-      const initialPage = page([]);
+      const initialPage = renderPage([]);
       const requests: string[] = [];
       const client = serverBackedClient(initialPage, app, requests);
-      const form = renderedForm(initialPage, "/books");
+      const form = renderedForm(initialPage, defaultAction("/books"));
       form.setValue("Title", "Kindred");
       form.setValue("Author", "Octavia E. Butler");
       const event = new TestSubmitEvent(form);
@@ -237,7 +243,7 @@ describe("browser shelf mutations", () => {
 
       expect(event.defaultPrevented).toBe(true);
       expect(client.reloads()).toBe(0);
-      expect(requests).toEqual([`${origin}/books`]);
+      expect(requests).toEqual([`${origin}${defaultAction("/books")}`]);
       expect(client.document.currentMain.markup).toContain("Kindred");
       expect(client.document.currentMain.markup).toContain("<b>0</b> of 1 read");
       expect(client.document.currentMain.markup).not.toContain("Your shelf is empty");
@@ -249,7 +255,7 @@ describe("browser shelf mutations", () => {
   test("serializes overlapping add, toggle, and delete mutations", async () => {
     const existing = book(1n, "Kindred");
     const added = book(2n, "Submitted title");
-    const initialPage = page([existing]);
+    const initialPage = renderPage([existing]);
     const toggleResponse = deferred<Response>();
     const addResponse = deferred<Response>();
     const deleteResponse = deferred<Response>();
@@ -259,23 +265,27 @@ describe("browser shelf mutations", () => {
     const requests: Array<{ url: string; body: Record<string, string> }> = [];
     const client = clientHarness(initialPage, (url, options) => {
       requests.push({ url, body: options.body.fields });
-      if (url.endsWith("/toggle")) {
+      if (new URL(url).pathname.endsWith("/toggle")) {
         toggleDispatched.resolve();
         return toggleResponse.promise;
       }
-      if (url.endsWith("/delete")) {
+      if (new URL(url).pathname.endsWith("/delete")) {
         deleteDispatched.resolve();
         return deleteResponse.promise;
       }
       addDispatched.resolve();
       return addResponse.promise;
     });
-    const toggle = new TestSubmitEvent(renderedForm(initialPage, "/books/1/toggle"));
-    const addForm = renderedForm(initialPage, "/books");
+    const toggle = new TestSubmitEvent(
+      renderedForm(initialPage, defaultAction("/books/1/toggle")),
+    );
+    const addForm = renderedForm(initialPage, defaultAction("/books"));
     addForm.setValue("Title", "Submitted title");
     addForm.setValue("Author", "Submitted author");
     const add = new TestSubmitEvent(addForm);
-    const remove = new TestSubmitEvent(renderedForm(initialPage, "/books/1/delete"));
+    const remove = new TestSubmitEvent(
+      renderedForm(initialPage, defaultAction("/books/1/delete")),
+    );
 
     const toggleSubmission = client.submit(toggle);
     const addSubmission = client.submit(add);
@@ -283,14 +293,16 @@ describe("browser shelf mutations", () => {
     addForm.setValue("Author", "Edited author");
 
     await toggleDispatched.promise;
-    expect(requests).toEqual([{ url: `${origin}/books/1/toggle`, body: {} }]);
-    toggleResponse.resolve(new Response(page([{ ...existing, read: true }])));
+    expect(requests).toEqual([
+      { url: `${origin}${defaultAction("/books/1/toggle")}`, body: {} },
+    ]);
+    toggleResponse.resolve(new Response(renderPage([{ ...existing, read: true }])));
 
     await addDispatched.promise;
     expect(requests).toEqual([
-      { url: `${origin}/books/1/toggle`, body: {} },
+      { url: `${origin}${defaultAction("/books/1/toggle")}`, body: {} },
       {
-        url: `${origin}/books`,
+        url: `${origin}${defaultAction("/books")}`,
         body: { title: "Submitted title", author: "Submitted author" },
       },
     ]);
@@ -298,18 +310,18 @@ describe("browser shelf mutations", () => {
     const deleteSubmission = client.submit(remove);
     await Promise.resolve();
     expect(requests).toHaveLength(2);
-    addResponse.resolve(new Response(page([added, { ...existing, read: true }])));
+    addResponse.resolve(new Response(renderPage([added, { ...existing, read: true }])));
 
     await deleteDispatched.promise;
     expect(requests).toEqual([
-      { url: `${origin}/books/1/toggle`, body: {} },
+      { url: `${origin}${defaultAction("/books/1/toggle")}`, body: {} },
       {
-        url: `${origin}/books`,
+        url: `${origin}${defaultAction("/books")}`,
         body: { title: "Submitted title", author: "Submitted author" },
       },
-      { url: `${origin}/books/1/delete`, body: {} },
+      { url: `${origin}${defaultAction("/books/1/delete")}`, body: {} },
     ]);
-    deleteResponse.resolve(new Response(page([added])));
+    deleteResponse.resolve(new Response(renderPage([added])));
     await Promise.all([toggleSubmission, addSubmission, deleteSubmission]);
 
     expect(client.document.currentMain.markup).toContain("Submitted title");
@@ -342,46 +354,49 @@ describe("browser shelf mutations", () => {
       const client = serverBackedClient(initialPage, app, requests);
 
       expect(renderedBook(initialPage, "First adjacent ID")).toContain(
-        'action="/books/9007199254740992/toggle"',
+        `action="${defaultRenderedAction("/books/9007199254740992/toggle")}"`,
       );
       expect(renderedBook(initialPage, "Second adjacent ID")).toContain(
-        'action="/books/9007199254740993/toggle"',
+        `action="${defaultRenderedAction("/books/9007199254740993/toggle")}"`,
       );
       expect(renderedBook(initialPage, "Negative ID")).toContain(
-        'action="/books/-1/toggle"',
+        `action="${defaultRenderedAction("/books/-1/toggle")}"`,
       );
 
       await client.submit(
-        new TestSubmitEvent(renderedForm(initialPage, "/books/-1/toggle")),
+        new TestSubmitEvent(renderedForm(initialPage, defaultAction("/books/-1/toggle"))),
       );
 
-      expect(requests).toEqual([`${origin}/books/-1/toggle`]);
+      expect(requests).toEqual([`${origin}${defaultAction("/books/-1/toggle")}`]);
       expect(renderedBook(client.document.currentMain.markup, "Negative ID")).toStartWith(
         '<li class="book is-read">',
       );
 
       await client.submit(
         new TestSubmitEvent(
-          renderedForm(client.document.currentMain.markup, "/books/-1/delete"),
+          renderedForm(client.document.currentMain.markup, defaultAction("/books/-1/delete")),
         ),
       );
 
       expect(requests).toEqual([
-        `${origin}/books/-1/toggle`,
-        `${origin}/books/-1/delete`,
+        `${origin}${defaultAction("/books/-1/toggle")}`,
+        `${origin}${defaultAction("/books/-1/delete")}`,
       ]);
       expect(client.document.currentMain.markup).not.toContain("Negative ID");
 
       await client.submit(
         new TestSubmitEvent(
-          renderedForm(client.document.currentMain.markup, "/books/9007199254740993/toggle"),
+          renderedForm(
+            client.document.currentMain.markup,
+            defaultAction("/books/9007199254740993/toggle"),
+          ),
         ),
       );
 
       expect(requests).toEqual([
-        `${origin}/books/-1/toggle`,
-        `${origin}/books/-1/delete`,
-        `${origin}/books/9007199254740993/toggle`,
+        `${origin}${defaultAction("/books/-1/toggle")}`,
+        `${origin}${defaultAction("/books/-1/delete")}`,
+        `${origin}${defaultAction("/books/9007199254740993/toggle")}`,
       ]);
       expect(renderedBook(client.document.currentMain.markup, "First adjacent ID")).toStartWith(
         '<li class="book">',
@@ -392,15 +407,18 @@ describe("browser shelf mutations", () => {
 
       await client.submit(
         new TestSubmitEvent(
-          renderedForm(client.document.currentMain.markup, "/books/9007199254740993/delete"),
+          renderedForm(
+            client.document.currentMain.markup,
+            defaultAction("/books/9007199254740993/delete"),
+          ),
         ),
       );
 
       expect(requests).toEqual([
-        `${origin}/books/-1/toggle`,
-        `${origin}/books/-1/delete`,
-        `${origin}/books/9007199254740993/toggle`,
-        `${origin}/books/9007199254740993/delete`,
+        `${origin}${defaultAction("/books/-1/toggle")}`,
+        `${origin}${defaultAction("/books/-1/delete")}`,
+        `${origin}${defaultAction("/books/9007199254740993/toggle")}`,
+        `${origin}${defaultAction("/books/9007199254740993/delete")}`,
       ]);
       expect(client.document.currentMain.markup).toContain("First adjacent ID");
       expect(client.document.currentMain.markup).not.toContain("Second adjacent ID");
@@ -476,21 +494,21 @@ describe("browser shelf mutations", () => {
   });
 
   test("confirms a rendered delete before submitting it", async () => {
-    const initialPage = page([book(1n, "Kindred")]);
+    const initialPage = renderPage([book(1n, "Kindred")]);
     let requests = 0;
     let confirmations = 0;
     const client = clientHarness(
       initialPage,
       async () => {
         requests++;
-        return new Response(page([]));
+        return new Response(renderPage([]));
       },
       () => {
         confirmations++;
         return false;
       },
     );
-    const form = renderedForm(initialPage, "/books/1/delete");
+    const form = renderedForm(initialPage, defaultAction("/books/1/delete"));
     const event = new TestSubmitEvent(form);
 
     await client.submit(event);
@@ -513,7 +531,7 @@ describe("browser shelf mutations", () => {
       await client.submit(event);
 
       expect(event.defaultPrevented).toBe(true);
-      expect(requests).toEqual([`${origin}/books/1/delete`]);
+      expect(requests).toEqual([`${origin}${defaultAction("/books/1/delete")}`]);
       expect(client.reloads()).toBe(0);
       expect(emptyStateContents(client.document.currentMain.markup)).toBe(
         "<p>Your shelf is empty. Add your first book above.</p>",
@@ -535,7 +553,7 @@ describe("browser shelf mutations", () => {
       await client.submit(event);
 
       expect(event.defaultPrevented).toBe(true);
-      expect(requests).toEqual([`${origin}/books/1/toggle`]);
+      expect(requests).toEqual([`${origin}${defaultAction("/books/1/toggle")}`]);
       expect(client.reloads()).toBe(0);
       expect(client.document.currentMain.markup).toContain('class="book is-read"');
       expect(client.document.currentMain.markup).toContain('<b>1</b> of 1 read');
@@ -546,11 +564,11 @@ describe("browser shelf mutations", () => {
   });
 
   test("reloads when a mutation cannot be confirmed", async () => {
-    const initialPage = page([]);
+    const initialPage = renderPage([]);
     const client = clientHarness(initialPage, async () => {
       throw new Error("network unavailable");
     });
-    const form = renderedForm(initialPage, "/books");
+    const form = renderedForm(initialPage, defaultAction("/books"));
     form.setValue("Title", "Kindred");
     form.setValue("Author", "Octavia E. Butler");
     await client.submit(new TestSubmitEvent(form));
@@ -560,10 +578,12 @@ describe("browser shelf mutations", () => {
   });
 
   test("reloads when a mutation response has no page content", async () => {
-    const initialPage = page([book(1n, "Kindred")]);
+    const initialPage = renderPage([book(1n, "Kindred")]);
     const client = clientHarness(initialPage, async () => new Response("Not a shelf page"));
 
-    await client.submit(new TestSubmitEvent(renderedForm(initialPage, "/books/1/toggle")));
+    await client.submit(
+      new TestSubmitEvent(renderedForm(initialPage, defaultAction("/books/1/toggle"))),
+    );
 
     expect(client.document.replacements).toEqual([]);
     expect(client.reloads()).toBe(1);
